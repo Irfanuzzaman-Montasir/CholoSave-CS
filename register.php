@@ -1,25 +1,184 @@
 <?php
-// Include the database connection
+// Set secure session parameters BEFORE starting the session
+ini_set('session.cookie_httponly', 1);
+ini_set('session.cookie_secure', 1);
+ini_set('session.use_strict_mode', 1);
+ini_set('session.cookie_samesite', 'Strict');
+
+// Start secure session
+session_start();
+
+// Force HTTPS (if not in development)
+if (!isset($_SERVER['HTTPS']) || $_SERVER['HTTPS'] !== 'on') {
+    if ($_SERVER['HTTP_HOST'] !== 'localhost' && $_SERVER['HTTP_HOST'] !== '127.0.0.1') {
+        header("Location: https://" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
+        exit();
+    }
+}
+
+// Include the database connection and password utilities
 include 'db.php';
+include 'password_utils.php';
 
 // Initialize variables
 $name = $email = $phone_number = $password = $retype_password = '';
 $error_message = '';
 $success_message = '';
 
-// Check if the form is submitted
+// Generate CSRF token if not exists
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// Rate limiting configuration
+$rate_limit = 3; // Number of submissions allowed
+$rate_limit_time = 300; // Time window in seconds (5 minutes)
+$ip_address = $_SERVER['REMOTE_ADDR'];
+
+// Initialize rate limit tracking if not exists
+if (!isset($_SESSION['rate_limit'])) {
+    $_SESSION['rate_limit'] = [
+        'count' => 0,
+        'start_time' => time(),
+        'ip' => $ip_address
+    ];
+}
+
+// Check if rate limit has expired
+if (time() - $_SESSION['rate_limit']['start_time'] > $rate_limit_time) {
+    $_SESSION['rate_limit'] = [
+        'count' => 0,
+        'start_time' => time(),
+        'ip' => $ip_address
+    ];
+}
+
+// Function to sanitize input
+function sanitize_input($data) {
+    $data = trim($data);
+    $data = stripslashes($data);
+    $data = htmlspecialchars($data, ENT_QUOTES, 'UTF-8');
+    return $data;
+}
+
+// Function to validate email
+function validate_email($email) {
+    return filter_var($email, FILTER_VALIDATE_EMAIL) && 
+           preg_match('/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $email);
+}
+
+// Function to validate phone number
+function validate_phone($phone) {
+    // Remove all non-digit characters
+    $phone = preg_replace('/[^0-9]/', '', $phone);
+    
+    // Check if it's a valid length (10-15 digits)
+    if (strlen($phone) < 10 || strlen($phone) > 15) {
+        return false;
+    }
+    
+    return true;
+}
+
+// Function to log security events
+function log_security_event($event_type, $details, $ip_address) {
+    global $conn;
+    
+    $stmt = $conn->prepare("INSERT INTO security_logs (event_type, details, ip_address, timestamp) VALUES (?, ?, ?, NOW())");
+    $stmt->bind_param("sss", $event_type, $details, $ip_address);
+    $stmt->execute();
+    $stmt->close();
+}
+
+// Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        // Get the form data and sanitize
-        $name = htmlspecialchars(trim($_POST['name']));
-        $email = htmlspecialchars(trim($_POST['email']));
-        $phone_number = htmlspecialchars(trim($_POST['phone']));
-        $password = htmlspecialchars(trim($_POST['password']));
-        $retype_password = htmlspecialchars(trim($_POST['retype-password']));
+        // Check rate limit
+        if ($_SESSION['rate_limit']['count'] >= $rate_limit) {
+            log_security_event('RATE_LIMIT_EXCEEDED', 'Registration rate limit exceeded', $ip_address);
+            throw new Exception("Too many registration attempts. Please try again in " . ceil(($rate_limit_time - (time() - $_SESSION['rate_limit']['start_time'])) / 60) . " minutes.");
+        }
 
-        // Validate the inputs
+        // Verify CSRF token
+        if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+            log_security_event('CSRF_ATTEMPT', 'Invalid CSRF token', $ip_address);
+            throw new Exception("Invalid form submission. Please try again.");
+        }
+
+        // Verify Turnstile (Cloudflare CAPTCHA)
+        if (!isset($_POST['cf-turnstile-response'])) {
+            throw new Exception("Please complete the security verification.");
+        }
+
+        $turnstile_response = $_POST['cf-turnstile-response'];
+        $turnstile_secret = "0x4AAAAAABV06DJH3sKKe6kuwz8k4tbcMBs"; // Replace with your actual secret key
+        
+        // Verify with Cloudflare
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, 'https://challenges.cloudflare.com/turnstile/v0/siteverify');
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
+            'secret' => $turnstile_secret,
+            'response' => $turnstile_response
+        ]));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        
+        $verify_response = curl_exec($ch);
+        $curl_error = curl_error($ch);
+        curl_close($ch);
+        
+        if ($curl_error) {
+            throw new Exception("Network error during verification. Please try again.");
+        }
+        
+        $response_data = json_decode($verify_response);
+        
+        if ($response_data === null || !isset($response_data->success) || !$response_data->success) {
+            log_security_event('CAPTCHA_FAILED', 'Turnstile verification failed', $ip_address);
+            throw new Exception("Please complete the security verification.");
+        }
+
+        // Get and validate form data
+        $name = sanitize_input($_POST['name']);
+        $email = sanitize_input($_POST['email']);
+        $phone_number = sanitize_input($_POST['phone']);
+        $password = $_POST['password'];
+        $retype_password = $_POST['retype-password'];
+
+        // Input validation
         if (empty($name) || empty($email) || empty($phone_number) || empty($password) || empty($retype_password)) {
             throw new Exception("All fields are required.");
+        }
+
+        // Length validation
+        if (strlen($name) > 100) {
+            throw new Exception("Name is too long. Maximum 100 characters allowed.");
+        }
+
+        if (strlen($email) > 255) {
+            throw new Exception("Email is too long.");
+        }
+
+        if (strlen($phone_number) > 20) {
+            throw new Exception("Phone number is too long.");
+        }
+
+        // Email validation
+        if (!validate_email($email)) {
+            throw new Exception("Please enter a valid email address.");
+        }
+
+        // Phone validation
+        if (!validate_phone($phone_number)) {
+            throw new Exception("Please enter a valid phone number.");
+        }
+
+        // Enhanced password validation using PasswordUtils
+        $password_validation = PasswordUtils::validatePasswordStrength($password);
+        if (!$password_validation['valid']) {
+            throw new Exception("Password requirements: " . implode(" ", $password_validation['errors']));
         }
 
         if ($password !== $retype_password) {
@@ -36,25 +195,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($result->num_rows > 0) {
             throw new Exception("Email is already registered.");
         }
+        $stmt->close();
 
-        // Hash the password
-        $hashed_password = password_hash($password, PASSWORD_BCRYPT);
+        // Enhanced password hashing with automatic salt generation and best algorithm selection
+        try {
+            $hashed_password = PasswordUtils::hashPassword($password);
+            
+            // Log the hashing algorithm used for security monitoring
+            $hash_info = PasswordUtils::getHashInfo($hashed_password);
+            $algorithm_name = PasswordUtils::getAlgorithmName($hash_info['algo']);
+            log_security_event('PASSWORD_HASHED', "Password hashed using $algorithm_name algorithm", $ip_address);
+            
+        } catch (Exception $e) {
+            log_security_event('PASSWORD_HASH_ERROR', $e->getMessage(), $ip_address);
+            throw new Exception("Password processing error. Please try again.");
+        }
 
         // Insert user data into the database
-        $insert_query = "INSERT INTO users (name, email, phone_number, password) VALUES (?, ?, ?, ?)";
+        $insert_query = "INSERT INTO users (name, email, phone_number, password, created_at) VALUES (?, ?, ?, ?, NOW())";
         $stmt = $conn->prepare($insert_query);
         $stmt->bind_param("ssss", $name, $email, $phone_number, $hashed_password);
 
         if ($stmt->execute()) {
-            $success_message = "User registered successfully.";
-            // Redirect to dashboard after successful login
+            // Increment rate limit counter
+            $_SESSION['rate_limit']['count']++;
+            
+            // Log successful registration with enhanced details
+            log_security_event('REGISTRATION_SUCCESS', "User registered: $email with $algorithm_name hashing", $ip_address);
+            
+            // Regenerate session ID for security
+            session_regenerate_id(true);
+            
+            $success_message = "User registered successfully! Please check your email for verification.";
+            
+            // Reset form by generating new CSRF token
+            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+            
+            // TODO: Send email verification
+            // send_verification_email($email, $name);
+            
+            // Redirect to dashboard after successful registration
             header('Location: /CholoSave-CS/user_landing_page.php');
             exit();
         } else {
             throw new Exception("Failed to register user. Please try again.");
         }
+        $stmt->close();
+        
     } catch (Exception $e) {
         $error_message = $e->getMessage();
+        log_security_event('REGISTRATION_ERROR', $error_message, $ip_address);
     }
 }
 ?>
@@ -193,6 +383,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     border: 1px solid #6EE7B7;
 }
 
+.password-requirements {
+    font-size: 0.75rem;
+    color: #6B7280;
+    margin-top: 0.5rem;
+}
+
 @media (max-width: 768px) {
     .login-card {
         flex-direction: column;
@@ -237,6 +433,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <?php endif; ?>
             
             <form method="POST">
+                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                
                 <div class="form-group">
                     <label class="form-label" for="name">Full Name</label>
                     <input 
@@ -246,6 +444,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         class="form-input"
                         placeholder="Enter your full name"
                         value="<?php echo htmlspecialchars($name); ?>"
+                        maxlength="100"
                         required
                     >
                 </div>
@@ -259,6 +458,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         class="form-input"
                         placeholder="Enter your email"
                         value="<?php echo htmlspecialchars($email); ?>"
+                        maxlength="255"
                         required
                     >
                 </div>
@@ -272,6 +472,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         class="form-input"
                         placeholder="Enter your phone number"
                         value="<?php echo htmlspecialchars($phone_number); ?>"
+                        maxlength="20"
                         required
                     >
                 </div>
@@ -284,8 +485,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         name="password" 
                         class="form-input"
                         placeholder="Create your password"
+                        minlength="8"
                         required
                     >
+                    <div class="password-requirements">
+                        Password must be at least 8 characters with uppercase, lowercase, number, and special character.
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -298,6 +503,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         placeholder="Confirm your password"
                         required
                     >
+                </div>
+
+                <!-- Cloudflare Turnstile CAPTCHA -->
+                <div class="form-group">
+                    <div class="cf-turnstile" data-sitekey="0x4AAAAAABV06Eefv4-cjRt7" data-theme="light"></div>
                 </div>
                 
                 <button type="submit" class="login-button">
@@ -312,4 +522,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
     </div>
 </div>
-<?php include 'includes/test_footer.php'; ?>
+
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+
+<?php include 'includes/test_footer.php'; ?> 
