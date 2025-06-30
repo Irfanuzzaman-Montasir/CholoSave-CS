@@ -1,37 +1,23 @@
 <?php
-/**
- * Enhanced Password Hashing Utilities
- * Provides strong password hashing with automatic salt generation and algorithm selection
- */
+
 
 class PasswordUtils {
     
-    // Preferred algorithms in order of preference
+    // Preferred algorithm: Only Argon2id
     private static $preferred_algorithms = [
-        PASSWORD_ARGON2ID,  // Best - Argon2id (PHP 7.3+)
-        PASSWORD_ARGON2I,   // Good - Argon2i (PHP 7.2+)
-        PASSWORD_BCRYPT     // Fallback - bcrypt (PHP 5.5+)
+        PASSWORD_ARGON2ID 
     ];
     
-    // Optimal parameters for each algorithm
     private static $algorithm_params = [
         PASSWORD_ARGON2ID => [
             'memory_cost' => 65536,    // 64MB
             'time_cost' => 4,          // 4 iterations
             'threads' => 3             // 3 threads
-        ],
-        PASSWORD_ARGON2I => [
-            'memory_cost' => 65536,    // 64MB
-            'time_cost' => 4,          // 4 iterations
-            'threads' => 3             // 3 threads
-        ],
-        PASSWORD_BCRYPT => [
-            'cost' => 12               // 2^12 iterations
         ]
     ];
     
     /**
-     * Hash a password using the best available algorithm
+     * 
      * Automatically generates and embeds salt
      * 
      * @param string $password The plain text password
@@ -120,14 +106,10 @@ class PasswordUtils {
      * @return int The best available algorithm constant
      */
     private static function getBestAvailableAlgorithm() {
-        foreach (self::$preferred_algorithms as $algorithm) {
-            if (defined($algorithm)) {
-                return constant($algorithm);
-            }
+        if (defined('PASSWORD_ARGON2ID')) {
+            return PASSWORD_ARGON2ID;
         }
-        
-        // Fallback to bcrypt if nothing else is available
-        return PASSWORD_BCRYPT;
+        throw new RuntimeException("Argon2id is not available on this PHP installation.");
     }
     
     /**
@@ -138,8 +120,6 @@ class PasswordUtils {
      */
     public static function getAlgorithmName($algorithm) {
         $names = [
-            PASSWORD_BCRYPT => 'bcrypt',
-            PASSWORD_ARGON2I => 'argon2i',
             PASSWORD_ARGON2ID => 'argon2id'
         ];
         

@@ -1,25 +1,76 @@
 <?php
+// Enforce HTTPS
+if (!isset($_SERVER['HTTPS']) || $_SERVER['HTTPS'] !== 'on') {
+    if ($_SERVER['HTTP_HOST'] !== 'localhost' && $_SERVER['HTTP_HOST'] !== '127.0.0.1') {
+        header("Location: https://" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
+        exit();
+    }
+}
+
+// Secure session management
+if (session_status() == PHP_SESSION_NONE) {
+    session_start();
+}
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php');
+    exit();
+}
+
 include 'db.php';
 include 'session.php';
+
+// Input sanitization function
+function sanitize_input($data) {
+    $data = trim($data);
+    $data = stripslashes($data);
+    $data = htmlspecialchars($data, ENT_QUOTES, 'UTF-8');
+    return $data;
+}
 
 $error_message = '';
 $success_message = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        $group_name = filter_var(trim($_POST['group_name']), FILTER_SANITIZE_STRING);
-        $description = filter_var(trim($_POST['description']), FILTER_SANITIZE_STRING);
-        $members = filter_var(trim($_POST['members']), FILTER_SANITIZE_NUMBER_INT);
-        $dps_type = $_POST['dps_type'];
-        $time_period = filter_var(trim($_POST['time_period']), FILTER_SANITIZE_NUMBER_INT);
-        $amount = filter_var(trim($_POST['amount']), FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
-        $start_date = $_POST['start_date'];
-        $goal_amount = filter_var(trim($_POST['goal_amount']), FILTER_SANITIZE_NUMBER_INT);
-        // $warning_threshold = filter_var(trim($_POST['warning_threshold']), FILTER_SANITIZE_NUMBER_INT);
-        $emergency_fund = filter_var(trim($_POST['emergency_fund']), FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
-        $bkash = filter_var(trim($_POST['bkash_number']), FILTER_SANITIZE_STRING);
-        $rocket = filter_var(trim($_POST['rocket_number']), FILTER_SANITIZE_STRING);
-        $nagad = filter_var(trim($_POST['nagad_number']), FILTER_SANITIZE_STRING);
+        // CAPTCHA verification (Cloudflare Turnstile)
+        if (!isset($_POST['cf-turnstile-response'])) {
+            $error_message = 'Please complete the security verification.';
+            throw new Exception('captcha_only');
+        }
+        $turnstile_response = $_POST['cf-turnstile-response'];
+        $turnstile_secret = "0x4AAAAAABV06DJH3sKKe6kuwz8k4tbcMBs"; // Replace with your actual secret key
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, 'https://challenges.cloudflare.com/turnstile/v0/siteverify');
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
+            'secret' => $turnstile_secret,
+            'response' => $turnstile_response
+        ]));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        $verify_response = curl_exec($ch);
+        $curl_error = curl_error($ch);
+        curl_close($ch);
+        $response_data = json_decode($verify_response);
+        if ($curl_error || $response_data === null || !isset($response_data->success) || !$response_data->success) {
+            $error_message = 'Please complete the security verification.';
+            throw new Exception('captcha_only');
+        }
+
+        // Sanitize all inputs
+        $group_name = sanitize_input($_POST['group_name']);
+        $description = sanitize_input($_POST['description']);
+        $members = sanitize_input($_POST['members']);
+        $dps_type = sanitize_input($_POST['dps_type']);
+        $time_period = sanitize_input($_POST['time_period']);
+        $amount = sanitize_input($_POST['amount']);
+        $start_date = sanitize_input($_POST['start_date']);
+        $goal_amount = sanitize_input($_POST['goal_amount']);
+        $emergency_fund = sanitize_input($_POST['emergency_fund']);
+        $bkash = sanitize_input($_POST['bkash_number']);
+        $rocket = sanitize_input($_POST['rocket_number']);
+        $nagad = sanitize_input($_POST['nagad_number']);
 
         if (empty($group_name) || empty($members) || empty($time_period) || empty($amount)) {
             throw new Exception("Please fill in all required fields.");
@@ -105,10 +156,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new Exception("Error creating group: " . $conn->error);
         }
     } catch (Exception $e) {
-        // Handle error
-        $error_message = $e->getMessage();
-        header("Location: error_page.php?error=" . urlencode($error_message));
-        exit();
+        if ($e->getMessage() !== 'captcha_only') {
+            // Handle error
+            $error_message = $e->getMessage();
+            header("Location: error_page.php?error=" . urlencode($error_message));
+            exit();
+        }
+        // else, just show the error on the same page
     }
 }
 ?>
@@ -196,6 +250,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <span class="text-sm mt-1">Review</span>
             </div>
         </div>
+
+        <?php if ($error_message): ?>
+            <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+                <?php echo $error_message; ?>
+            </div>
+        <?php endif; ?>
 
         <form id="groupForm" class="space-y-6" method="POST" action="">
             <!-- Step 1: Group Information -->
@@ -371,6 +431,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="flex justify-between mt-6">
                     <button type="button" class="bg-gray-300 text-gray-700 px-4 py-2 rounded-md"
                         id="prevButton4">Previous</button>
+                    <!-- Cloudflare Turnstile CAPTCHA -->
+                    <div class="form-group w-full mb-4">
+                        <div class="cf-turnstile" data-sitekey="0x4AAAAAABV06Eefv4-cjRt7" data-theme="light"></div>
+                    </div>
                     <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded-md">Confirm & Submit</button>
                 </div>
             </div>
@@ -604,6 +668,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Initialize first step
         showStep(currentStep);
     </script>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </body>
 
 </html>
