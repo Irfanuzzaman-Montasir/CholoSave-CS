@@ -1,7 +1,30 @@
 <?php
+// Enforce HTTPS
+if (!isset($_SERVER['HTTPS']) || $_SERVER['HTTPS'] !== 'on') {
+    if ($_SERVER['HTTP_HOST'] !== 'localhost' && $_SERVER['HTTP_HOST'] !== '127.0.0.1') {
+        header("Location: https://" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
+        exit();
+    }
+}
 include 'db.php';
 
 session_start();
+
+// Function to sanitize input
+function sanitize_input($data) {
+    $data = trim($data);
+    $data = stripslashes($data);
+    $data = htmlspecialchars($data, ENT_QUOTES, 'UTF-8');
+    return $data;
+}
+// Function to log security events
+function log_security_event($event_type, $details, $ip_address) {
+    global $conn;
+    $stmt = $conn->prepare("INSERT INTO security_logs (event_type, details, ip_address, timestamp) VALUES (?, ?, ?, NOW())");
+    $stmt->bind_param("sss", $event_type, $details, $_SERVER['REMOTE_ADDR']);
+    $stmt->execute();
+    $stmt->close();
+}
 
 if (!isset($_SESSION['reset_email'])) {
     header('Location: forgot_password.php');
@@ -10,7 +33,7 @@ if (!isset($_SESSION['reset_email'])) {
 
 $email = $_SESSION['reset_email'];
 $error_message = '';
-
+$ip_address = $_SERVER['REMOTE_ADDR'];
 
 $query = "SELECT otp_expiry FROM users WHERE email = ?";
 $stmt = $conn->prepare($query);
@@ -21,25 +44,32 @@ $row = $result->fetch_assoc();
 $otp_expiry_time = $row['otp_expiry'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $entered_otp = trim($_POST['otp']);
-
+    $entered_otp = sanitize_input($_POST['otp'] ?? '');
     date_default_timezone_set('Asia/Dhaka');
-
+    $entered_otp_hash = hash('sha256', $entered_otp);
     // Check OTP in database with time-based validation
     $query = "SELECT * FROM users WHERE email = ? AND otp = ? AND otp_expiry > NOW()";
     $stmt = $conn->prepare($query);
-    $stmt->bind_param("ss", $email, $entered_otp);
+    $stmt->bind_param("ss", $email, $entered_otp_hash);
     $stmt->execute();
     $result = $stmt->get_result();
-
     if ($result->num_rows > 0) {
         // Valid OTP, proceed to reset password
         $_SESSION['otp_verified'] = true;
+        log_security_event('FORGOT_PASSWORD_OTP_SUCCESS', 'OTP verified for: ' . $email, $ip_address);
         header('Location: reset_password.php');
         exit();
     } else {
         $error_message = "Invalid or expired OTP";
+        log_security_event('FORGOT_PASSWORD_OTP_FAIL', 'OTP failed for: ' . $email, $ip_address);
     }
+}
+// Cancel logic
+if (isset($_GET['cancel'])) {
+    unset($_SESSION['reset_email']);
+    unset($_SESSION['otp_verified']);
+    header('Location: login.php');
+    exit();
 }
 ?>
 <!DOCTYPE html>
@@ -71,6 +101,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 Verify OTP
             </button>
         </form>
+        <div class="text-center mt-4">
+            <a href="?cancel=1" class="text-blue-600 hover:underline">Cancel</a>
+        </div>
     </div>
 
     <script>

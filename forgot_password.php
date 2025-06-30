@@ -1,5 +1,12 @@
 <?php
 ob_start();
+// Enforce HTTPS
+if (!isset($_SERVER['HTTPS']) || $_SERVER['HTTPS'] !== 'on') {
+    if ($_SERVER['HTTP_HOST'] !== 'localhost' && $_SERVER['HTTP_HOST'] !== '127.0.0.1') {
+        header("Location: https://" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
+        exit();
+    }
+}
 include 'db.php';
 include 'vendor/autoload.php'; 
 include 'includes/new_header.php';
@@ -11,12 +18,30 @@ if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
 
+// Function to sanitize input
+function sanitize_input($data) {
+    $data = trim($data);
+    $data = stripslashes($data);
+    $data = htmlspecialchars($data, ENT_QUOTES, 'UTF-8');
+    return $data;
+}
+
+// Function to log security events
+function log_security_event($event_type, $details, $ip_address) {
+    global $conn;
+    $stmt = $conn->prepare("INSERT INTO security_logs (event_type, details, ip_address, timestamp) VALUES (?, ?, ?, NOW())");
+    $stmt->bind_param("sss", $event_type, $details, $_SERVER['REMOTE_ADDR']);
+    $stmt->execute();
+    $stmt->close();
+}
+
 $email = '';
 $error_message = '';
 $success_message = '';
+$ip_address = $_SERVER['REMOTE_ADDR'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $email = filter_var(trim($_POST['email']), FILTER_SANITIZE_EMAIL);
+    $email = sanitize_input($_POST['email'] ?? '');
 
     // Check if email exists in database
     $query = "SELECT * FROM users WHERE email = ?";
@@ -25,20 +50,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $stmt->execute();
     $result = $stmt->get_result();
 
+    // Always show generic message
+    $success_message = "If this email is registered, you will receive an OTP to reset your password.";
+
     if ($result->num_rows > 0) {
         // Generate OTP
         $otp = sprintf("%06d", mt_rand(1, 999999));
-
         date_default_timezone_set('Asia/Dhaka');
-        // Set expiry to 2 minutes from now
         $otp_expiry = date('Y-m-d H:i:s', strtotime('+2 minutes'));
-
-        // Store OTP in database
+        $otp_hash = hash('sha256', $otp);
+        // Store OTP hash in database
         $update_query = "UPDATE users SET otp = ?, otp_expiry = ? WHERE email = ?";
         $update_stmt = $conn->prepare($update_query);
-        $update_stmt->bind_param("sss", $otp, $otp_expiry, $email);
+        $update_stmt->bind_param("sss", $otp_hash, $otp_expiry, $email);
         $update_stmt->execute();
-
         // Send OTP via email using PHPMailer
         $mail = new PHPMailer(true);
         try {
@@ -49,29 +74,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $mail->Password = 'dhsq tqmy dfap ztob'; // Use App Password
             $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
             $mail->Port = 587;
-
             $mail->setFrom('cholosave.uiu@gmail.com', 'CholoSave');
             $mail->addAddress($email);
             $mail->isHTML(true);
             $mail->Subject = 'Password Reset OTP';
             $mail->Body = "Your OTP for password reset is: <b>$otp</b>. This OTP will expire in 2 minutes.";
-
             $mail->send();
-           // Store email in session for OTP verification
-           $_SESSION['reset_email'] = $email;
-            
-           // Clear output buffer and redirect
-           ob_end_clean();
-           header('Location: /CholoSave-CS/verify_otp.php');
-           exit();
+            // Store email in session for OTP verification
+            $_SESSION['reset_email'] = $email;
+            // Clear output buffer and redirect
+            ob_end_clean();
+            header('Location: /CholoSave-CS/verify_otp.php');
+            exit();
         } catch (Exception $e) {
             $error_message = "OTP could not be sent. {$mail->ErrorInfo}";
         }
-    } else {
-        $error_message = "Email not found in our system.";
     }
-
-    ob_end_flush();
 }
 ?>
 
