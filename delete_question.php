@@ -8,17 +8,21 @@ if (!isset($_SESSION['user_id']) || !isset($_POST['question_id'])) {
     exit();
 }
 
-$user_id = mysqli_real_escape_string($conn, $_SESSION['user_id']);
-$question_id = mysqli_real_escape_string($conn, $_POST['question_id']);
+if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+$user_id = $_SESSION['user_id'];
+$question_id = $_POST['question_id'];
 
 // Start transaction
 mysqli_begin_transaction($conn);
 
 try {
     // Verify user owns the question
-    $check_query = "SELECT user_id FROM questions WHERE id = '$question_id'";
-    $result = mysqli_query($conn, $check_query);
-    $question = mysqli_fetch_assoc($result);
+    $stmt = $conn->prepare("SELECT user_id FROM questions WHERE id = ?");
+    $stmt->bind_param('i', $question_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $question = $result->fetch_assoc();
+    $stmt->close();
 
     if (!$question || $question['user_id'] != $user_id) {
         throw new Exception('Unauthorized');
@@ -27,20 +31,29 @@ try {
     // Delete all reactions to replies of this question
     $delete_reply_reactions = "DELETE reactions FROM reactions 
                              INNER JOIN replies ON reactions.reply_id = replies.id 
-                             WHERE replies.question_id = '$question_id'";
-    mysqli_query($conn, $delete_reply_reactions);
+                             WHERE replies.question_id = ?";
+    $stmt = $conn->prepare($delete_reply_reactions);
+    $stmt->bind_param('i', $question_id);
+    $stmt->execute();
+    $stmt->close();
 
     // Delete all reactions to the question
-    $delete_question_reactions = "DELETE FROM reactions WHERE question_id = '$question_id'";
-    mysqli_query($conn, $delete_question_reactions);
+    $stmt = $conn->prepare("DELETE FROM reactions WHERE question_id = ?");
+    $stmt->bind_param('i', $question_id);
+    $stmt->execute();
+    $stmt->close();
 
     // Delete all replies to the question
-    $delete_replies = "DELETE FROM replies WHERE question_id = '$question_id'";
-    mysqli_query($conn, $delete_replies);
+    $stmt = $conn->prepare("DELETE FROM replies WHERE question_id = ?");
+    $stmt->bind_param('i', $question_id);
+    $stmt->execute();
+    $stmt->close();
 
     // Finally, delete the question
-    $delete_question = "DELETE FROM questions WHERE id = '$question_id' AND user_id = '$user_id'";
-    $result = mysqli_query($conn, $delete_question);
+    $stmt = $conn->prepare("DELETE FROM questions WHERE id = ? AND user_id = ?");
+    $stmt->bind_param('ii', $question_id, $user_id);
+    $result = $stmt->execute();
+    $stmt->close();
 
     if (!$result) {
         throw new Exception('Failed to delete question');

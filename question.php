@@ -8,39 +8,52 @@ if (!isset($_SESSION['user_id']) || !isset($_GET['id'])) {
     exit();
 }
 
-$question_id = mysqli_real_escape_string($conn, $_GET['id']);
+$question_id = $_GET['id'];
 
 // Update view count
-$update_views = "UPDATE questions SET views = views + 1 WHERE id = '$question_id'";
-mysqli_query($conn, $update_views);
+$stmt = $conn->prepare("UPDATE questions SET views = views + 1 WHERE id = ?");
+$stmt->bind_param('i', $question_id);
+$stmt->execute();
+$stmt->close();
 
 // Fetch question with user info
-$question_query = "
+$stmt = $conn->prepare("
     SELECT 
         q.*,
         u.name as author_name
     FROM questions q
     LEFT JOIN users u ON q.user_id = u.id
-    WHERE q.id = '$question_id'
-";
-$question_result = mysqli_query($conn, $question_query);
-$question = mysqli_fetch_assoc($question_result);
+    WHERE q.id = ?
+");
+$stmt->bind_param('i', $question_id);
+$stmt->execute();
+$question_result = $stmt->get_result();
+$question = $question_result->fetch_assoc();
+$stmt->close();
 
 // Fetch replies with user info
-$replies_query = "
+$stmt = $conn->prepare("
     SELECT 
         r.*,
         u.name as author_name
     FROM replies r
     LEFT JOIN users u ON r.user_id = u.id
-    WHERE r.question_id = '$question_id'
+    WHERE r.question_id = ?
     ORDER BY r.created_at ASC
-";
-$replies_result = mysqli_query($conn, $replies_query);
+");
+$stmt->bind_param('i', $question_id);
+$stmt->execute();
+$replies_result = $stmt->get_result();
 $replies = [];
-while ($reply = mysqli_fetch_assoc($replies_result)) {
+while ($reply = $replies_result->fetch_assoc()) {
     $replies[] = $reply;
 }
+$stmt->close();
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
 ?>
 
 <!DOCTYPE html>
@@ -49,7 +62,7 @@ while ($reply = mysqli_fetch_assoc($replies_result)) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?php echo htmlspecialchars($question['title']); ?> - Forum</title>
+    <title><?php echo htmlspecialchars($question['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?> - Forum</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
@@ -69,14 +82,14 @@ while ($reply = mysqli_fetch_assoc($replies_result)) {
                 <div class="flex justify-between items-start w-full">
                     <div class="flex-1">
                         <h1 class="text-3xl font-bold text-gray-800 mb-4">
-                            <?php echo htmlspecialchars($question['title']); ?>
+                            <?php echo htmlspecialchars($question['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
                         </h1>
                         <div class="prose max-w-none">
-                            <?php echo nl2br(htmlspecialchars($question['content'])); ?>
+                            <?php echo nl2br(htmlspecialchars($question['content'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')); ?>
                         </div>
                         <div class="flex items-center mt-6 space-x-4">
                             <span class="text-sm text-gray-500">
-                                <i class="fas fa-user"></i> <?php echo htmlspecialchars($question['author_name']); ?>
+                                <i class="fas fa-user"></i> <?php echo htmlspecialchars($question['author_name'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
                             </span>
 
                             <span class="text-sm text-gray-500">
@@ -108,11 +121,11 @@ while ($reply = mysqli_fetch_assoc($replies_result)) {
                     <div class="flex justify-between">
                         <div class="flex-1">
                             <div class="prose max-w-none">
-                                <?php echo nl2br(htmlspecialchars($reply['content'])); ?>
+                                <?php echo nl2br(htmlspecialchars($reply['content'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')); ?>
                             </div>
                             <div class="flex items-center mt-4 space-x-4">
                                 <span class="text-sm text-gray-500">
-                                    <i class="fas fa-user"></i> <?php echo htmlspecialchars($reply['author_name']); ?>
+                                    <i class="fas fa-user"></i> <?php echo htmlspecialchars($reply['author_name'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
                                 </span>
                                 <span class="text-sm text-gray-500">
                                     <i class="fas fa-clock"></i>
@@ -128,6 +141,7 @@ while ($reply = mysqli_fetch_assoc($replies_result)) {
             <div class="bg-white rounded-lg shadow-md p-6">
                 <h3 class="text-xl font-bold text-gray-800 mb-4">Add Your Reply</h3>
                 <form action="submit_reply.php" method="POST">
+                    <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>">
                     <input type="hidden" name="question_id" value="<?php echo $question_id; ?>">
                     <div class="mb-4">
                         <textarea name="content" rows="4" required

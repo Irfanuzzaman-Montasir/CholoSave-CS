@@ -10,29 +10,55 @@ if (!isset($_SESSION['user_id'])) {
 
 // Get user information
 $user_id = $_SESSION['user_id'];
-$user_query = "SELECT name FROM users WHERE id = '$user_id'";
-$user_result = mysqli_query($conn, $user_query);
-$user = mysqli_fetch_assoc($user_result);
+$stmt = $conn->prepare("SELECT name FROM users WHERE id = ?");
+$stmt->bind_param('i', $user_id);
+$stmt->execute();
+$user_result = $stmt->get_result();
+$user = $user_result->fetch_assoc();
+$stmt->close();
 
 // Fetch questions with user info and stats
 $filter = isset($_GET['filter']) ? $_GET['filter'] : '';
-$questions_query = "
-    SELECT 
-        q.*, 
-        u.name as author_name,
-        COUNT(DISTINCT r.id) as reply_count
-    FROM questions q
-    LEFT JOIN users u ON q.user_id = u.id
-    LEFT JOIN replies r ON q.id = r.question_id
-    " . ($filter === 'my_questions' ? "WHERE q.user_id = '$user_id'" : "") . "
-    GROUP BY q.id
-    ORDER BY q.created_at DESC
-";
-$questions_result = mysqli_query($conn, $questions_query);
+if ($filter === 'my_questions') {
+    $questions_query = "
+        SELECT 
+            q.*, 
+            u.name as author_name,
+            COUNT(DISTINCT r.id) as reply_count
+        FROM questions q
+        LEFT JOIN users u ON q.user_id = u.id
+        LEFT JOIN replies r ON q.id = r.question_id
+        WHERE q.user_id = ?
+        GROUP BY q.id
+        ORDER BY q.created_at DESC
+    ";
+    $stmt = $conn->prepare($questions_query);
+    $stmt->bind_param('i', $user_id);
+    $stmt->execute();
+    $questions_result = $stmt->get_result();
+} else {
+    $questions_query = "
+        SELECT 
+            q.*, 
+            u.name as author_name,
+            COUNT(DISTINCT r.id) as reply_count
+        FROM questions q
+        LEFT JOIN users u ON q.user_id = u.id
+        LEFT JOIN replies r ON q.id = r.question_id
+        GROUP BY q.id
+        ORDER BY q.created_at DESC
+    ";
+    $questions_result = $conn->query($questions_query);
+}
 $questions = [];
-while ($row = mysqli_fetch_assoc($questions_result)) {
+while ($row = $questions_result->fetch_assoc()) {
     $questions[] = $row;
 }
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
 ?>
 
 <!DOCTYPE html>
@@ -53,7 +79,7 @@ while ($row = mysqli_fetch_assoc($questions_result)) {
             <div class="flex justify-between items-center">
                 <div>
                     <h1 class="text-2xl font-bold text-gray-800">Welcome,
-                        <?php echo htmlspecialchars($user['name']); ?>!</h1>
+                        <?php echo htmlspecialchars($user['name'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>!</h1>
                     <p class="text-gray-600">Join the discussion or start your own topic</p>
                 </div>
                 <div class="flex space-x-4">
@@ -95,13 +121,13 @@ while ($row = mysqli_fetch_assoc($questions_result)) {
                         <div class="flex-1">
                             <a href="question.php?id=<?php echo $question['id']; ?>"
                                 class="text-xl font-semibold text-blue-600 hover:text-blue-800">
-                                <?php echo htmlspecialchars($question['title']); ?>
+                                <?php echo htmlspecialchars($question['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
                             </a>
                             <p class="text-gray-600 mt-2">
-                                <?php echo substr(htmlspecialchars($question['content']), 0, 200) . '...'; ?></p>
+                                <?php echo substr(htmlspecialchars($question['content'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), 0, 200) . '...'; ?></p>
                             <div class="flex items-center mt-4 space-x-4">
                                 <span class="text-sm text-gray-500">
-                                    <i class="fas fa-user"></i> <?php echo htmlspecialchars($question['author_name']); ?>
+                                    <i class="fas fa-user"></i> <?php echo htmlspecialchars($question['author_name'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
                                 </span>
                                 <span class="text-sm text-gray-500">
                                     <i class="fas fa-clock"></i>
@@ -127,6 +153,7 @@ while ($row = mysqli_fetch_assoc($questions_result)) {
             class="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-8 w-full max-w-2xl">
             <h2 class="text-2xl font-bold mb-4">Ask a Question</h2>
             <form id="questionForm" action="submit_question.php" method="POST">
+                <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>">
                 <div class="mb-4">
                     <label class="block text-gray-700 text-sm font-bold mb-2" for="title">
                         Title
