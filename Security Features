@@ -1,0 +1,33 @@
+Contact Us Page -> XSS, CSRF (Cross-Site Request Forgery) Protection ,Database Security,3. Rate Limiting / Throttling
+Login Page ->1. Brute Force Protection
+   - Implement rate limiting for login attempts
+   - Track failed login attempts per IP address
+   - Add delay between login attempts
+   - Maximum 5 attempts within 15 minutes
+
+2. Account Lockout
+   - Temporary account lockout after multiple failed attempts
+   - Lock duration: 30 minutes
+   - Automatic unlock after lockout period
+   - Email notification on lockout
+
+3. Password Security
+   - Minimum password length: 8 characters
+   - Require mix of uppercase, lowercase, numbers, and special characters
+   - Password hashing using bcrypt
+   - Password expiration policy (90 days)
+   - Prevent password reuse
+
+4. Session Security
+   - Secure session handling
+   - Session timeout after 30 minutes of inactivity
+   - Regenerate session ID after login
+   - Prevent session fixation
+   - Secure cookie settings (HttpOnly, Secure flags)
+
+5. Input Validation
+   - Sanitize all user inputs
+   - Validate email format
+   - Prevent SQL injection
+   - Prevent XSS attacks
+   - CSRF protection

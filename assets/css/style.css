@@ -1,0 +1,729 @@
+/* General Body Styling */
+body {
+    font-family: 'Inter', sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #f4f7f9;
+}
+
+/* Header Styling */
+.header {
+    background-color: #ffffff;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    padding: 15px 0;
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+}
+
+/* Container for Centered Content */
+.container {
+    width: 90%;
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+/* Logo Styling */
+.logo a {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: #003366;
+    text-decoration: none;
+}
+
+.brand {
+    color: #ff5722; /* Accent color */
+}
+
+/* Navigation Bar Styling */
+.nav {
+    display: flex;
+    gap: 20px;
+}
+
+.nav a {
+    font-size: 1rem;
+    color: #333;
+    text-decoration: none;
+    padding: 10px 15px;
+    transition: all 0.3s ease;
+}
+
+.nav a:hover {
+    color: #ff5722;
+    background-color: #f1f1f1;
+    border-radius: 5px;
+}
+
+/* Login/Register Button */
+.btn-login {
+    background-color: #57b8ff; /* Sky blue */
+    color: white;
+    padding: 10px 20px;
+    border-radius: 5px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.3s ease;
+}
+
+.btn-login:hover {
+    background-color: #0099cc; /* Darker sky blue */
+}
+
+/* Mobile Menu Toggle */
+.menu-toggle {
+    display: none;
+    flex-direction: column;
+    gap: 5px;
+    cursor: pointer;
+}
+
+.menu-toggle span {
+    width: 30px;
+    height: 3px;
+    background-color: #333;
+}
+
+/* Media Query for Mobile Navigation */
+@media screen and (max-width: 768px) {
+    .nav {
+        display: none;
+        flex-direction: column;
+        gap: 10px;
+        position: absolute;
+        right: 20px;
+        top: 60px;
+        background-color: #fff;
+        border-radius: 10px;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    .nav.active {
+        display: flex;
+    }
+
+    .menu-toggle {
+        display: flex;
+    }
+}
+
+
+/* Hero section */
+.landing .hero {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 2rem 0;
+}
+
+.landing .hero-text h1 {
+    font-size: 2.5rem;
+    color: #333;
+}
+
+.landing .hero-text p {
+    margin: 1rem 0;
+    color: #555;
+}
+
+.landing .btn-primary {
+    background: #007bff;
+    color: white;
+    padding: 0.75rem 1.5rem;
+    border-radius: 5px;
+    text-decoration: none;
+    font-weight: 600;
+    
+}
+
+.landing .hero-image img {
+    max-width: 100%;
+    height: auto;
+}
+
+/* Footer */
+.footer {
+    background: #333;
+    color: #fff;
+    padding: 2rem 0;
+    text-align: center;
+}
+
+.footer a {
+    text-decoration: none;
+    color: #007bff;
+}
+
+.footer .footer-links {
+    display: flex;
+    justify-content: space-around;
+    margin: 1.5rem 0;
+}
+
+.footer .footer-links h4 {
+    color: #fff600;
+    margin-bottom: 0.5rem;
+}
+
+.footer .footer-social img {
+    width: 30px;
+    margin: 0 0.5rem;
+    filter: invert(1);
+}
+
+.footer .footer-brand {
+    margin-bottom: 1.5rem;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .header .nav {
+        display: none;
+        flex-direction: column;
+        gap: 1rem;
+        background: #007bff;
+        padding: 1rem;
+    }
+
+    .header .menu-toggle {
+        display: flex;
+    }
+
+    .landing .hero {
+        flex-direction: column;
+        text-align: center;
+    }
+
+    .footer .footer-links {
+        flex-direction: column;
+        gap: 1.5rem;
+    }
+}
+/* Login Page Styles */
+.login-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    background: linear-gradient(to bottom, #007bff, #f9f9f9);
+}
+
+.login-box {
+    background: #fff;
+    padding: 2rem;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+}
+
+.login-box h2 {
+    font-size: 1.8rem;
+    margin-bottom: 1rem;
+    color: #333;
+}
+
+.login-box .brand {
+    color: #007bff;
+}
+
+.login-form .form-group {
+    margin-bottom: 1.5rem;
+    text-align: left;
+}
+
+.login-form .form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: bold;
+    color: #555;
+}
+
+.login-form .form-group input {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    font-size: 1rem;
+    color: #333;
+    outline: none;
+    transition: border-color 0.3s ease;
+}
+
+.login-form .form-group input:focus {
+    border-color: #007bff;
+    box-shadow: 0 0 4px rgba(0, 123, 255, 0.5);
+}
+
+.login-form .form-actions {
+    margin: 1.5rem 0;
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.login-form .form-actions .btn-primary {
+    flex: 1;
+    background: #007bff;
+    color: white;
+    padding: 0.75rem 1rem;
+    border-radius: 5px;
+    text-decoration: none;
+    border: none;
+    font-size: 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.3s ease;
+}
+
+.login-form .form-actions .btn-primary:hover {
+    background: #0056b3;
+}
+
+.login-form .form-actions .btn-secondary {
+    flex: 1;
+    background: #ff7043;
+    color: white;
+    padding: 0.75rem 1rem;
+    border-radius: 5px;
+    text-decoration: none;
+    font-size: 1rem;
+    font-weight: bold;
+    transition: background 0.3s ease;
+}
+
+.login-form .form-actions .btn-secondary:hover {
+    background: #e64a19;
+}
+
+.login-form .form-links {
+    margin-top: 1rem;
+}
+
+.login-form .form-links a {
+    color: #007bff;
+    text-decoration: none;
+    font-size: 0.9rem;
+}
+
+.login-form .form-links a:hover {
+    text-decoration: underline;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .login-box {
+        padding: 1.5rem;
+    }
+}
+/* Signup Page Styles */
+.signup-container, .expert-container, .contact-container {
+    padding: 2rem;
+    background: #f9f9f9;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.signup-box, .contact-form-container {
+    background: #fff;
+    padding: 2rem;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    max-width: 600px;
+    width: 100%;
+}
+
+.signup-box h2, .contact-header h2, .expert-header h2 {
+    color: #333;
+    margin-bottom: 1rem;
+    text-align: center;
+}
+
+.signup-box .form-group, .contact-form .form-group {
+    margin-bottom: 1.5rem;
+}
+
+.contact-form textarea {
+    resize: none;
+}
+
+.expert-header {
+    text-align: center;
+}
+
+.expert-team {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.expert-card {
+    background: #fff;
+    padding: 1rem;
+    border-radius: 10px;
+    text-align: center;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    width: 300px;
+}
+
+.expert-card img {
+    border-radius: 50%;
+    width: 100px;
+    height: 100px;
+    object-fit: cover;
+    margin-bottom: 1rem;
+}
+
+.expert-card h3 {
+    margin: 0.5rem 0;
+    color: #333;
+}
+
+.expert-card p {
+    color: #666;
+}
+
+
+/* Vision Section */
+.vision {
+    background-color: #f7f7f7;
+    padding: 40px 0;
+    text-align: center;
+}
+
+.vision-container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.vision-title {
+    font-size: 2.5rem;
+    font-weight: bold;
+    color: #333;
+    margin-bottom: 20px;
+}
+
+.vision-description {
+    font-size: 1.2rem;
+    color: #555;
+    line-height: 1.6;
+    max-width: 700px;
+    margin: 0 auto;
+    font-style: italic;
+}
+
+.vision-container::before {
+    content: '';
+    display: block;
+    width: 60px;
+    height: 3px;
+    background-color: #007bff;
+    margin: 0 auto 20px;
+}
+/* General Layout */
+.vision-financial {
+    font-family: 'Arial', sans-serif;
+    color: #333;
+}
+
+/* Vision Intro Section */
+.vision-intro {
+    background-color: #fff;
+    color: #fff;
+    padding: 80px 0;
+    text-align: center;
+}
+
+.vision-container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.vision-title {
+    font-size: 3rem;
+    font-weight: bold;
+    margin-bottom: 20px;
+}
+
+.vision-description {
+    font-size: 1.3rem;
+    line-height: 1.6;
+    margin-bottom: 30px;
+}
+
+/* Financial Impact Section */
+.financial-impact {
+    background-color: #f4f4f4;
+    padding: 60px 0;
+}
+
+.impact-container {
+    text-align: center;
+}
+
+.impact-title {
+    font-size: 2.5rem;
+    font-weight: bold;
+    margin-bottom: 30px;
+}
+
+.impact-boxes {
+    display: flex;
+    justify-content: space-around;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+.impact-box {
+    background-color: #fff;
+    padding: 40px 20px;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    width: 30%;
+    min-width: 250px;
+}
+
+.impact-heading {
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: #003366;
+    margin-bottom: 10px;
+}
+
+.impact-text {
+    font-size: 1.1rem;
+    color: #555;
+}
+
+/* Vision Goals Section */
+.vision-goals {
+    padding: 60px 0;
+    background-color: #fff;
+    text-align: center;
+}
+
+.goals-container {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.goals-title {
+    font-size: 2.5rem;
+    font-weight: bold;
+    margin-bottom: 30px;
+}
+
+.goals-list {
+    list-style-type: none;
+    padding: 0;
+}
+
+.goal-item {
+    font-size: 1.3rem;
+    color: #444;
+    margin-bottom: 15px;
+}
+
+/* CTA Join Section */
+.cta-join {
+    background-color: #fff;
+    color: #491a1a;
+    padding: 60px 0;
+    text-align: center;
+}
+
+.cta-container {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.cta-title {
+    font-size: 2.5rem;
+    font-weight: bold;
+    margin-bottom: 20px;
+}
+
+.cta-container .btn-primary {
+    background-color: #ff5722;
+    color: #fff;
+    padding: 12px 24px;
+    text-decoration: none;
+    border-radius: 5px;
+    font-size: 1rem;
+}
+
+.cta-container .btn-primary:hover {
+    background-color: #e64a19;
+}
+/* Import Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500&display=swap');
+
+/* Base styles */
+.vision-financial {
+    font-family: 'Inter', sans-serif;
+    color: #333;
+    line-height: 1.6;
+}
+
+/* Hero Section */
+.vision-intro {
+    background: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.5)),
+                url('/assets/images/hero-finance.jpg') center/cover;
+    padding: 120px 0;
+    color: white;
+    text-align: center;
+}
+
+.vision-title {
+    font-family: 'Poppins', sans-serif;
+    font-size: 3.5rem;
+    font-weight: 700;
+    margin-bottom: 1.5rem;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.vision-description {
+    font-size: 1.2rem;
+    max-width: 800px;
+    margin: 0 auto;
+    line-height: 1.8;
+}
+
+/* Impact Section */
+.financial-impact {
+    padding: 80px 0;
+    background: #f8f9fa;
+}
+
+.impact-boxes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 30px;
+    padding: 40px 0;
+}
+
+.impact-box {
+    background: white;
+    padding: 40px;
+    border-radius: 10px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    transition: transform 0.3s ease;
+    text-align: center;
+}
+
+.impact-box:hover {
+    transform: translateY(-10px);
+}
+
+.impact-box::before {
+    content: '';
+    display: block;
+    width: 80px;
+    height: 80px;
+    margin: 0 auto 20px;
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+.impact-box:nth-child(1)::before {
+    background-image: url('/assets/images/collaboration-icon.svg');
+}
+
+.impact-box:nth-child(2)::before {
+    background-image: url('/assets/images/investment-icon.svg');
+}
+
+.impact-box:nth-child(3)::before {
+    background-image: url('/assets/images/freedom-icon.svg');
+}
+
+/* Goals Section */
+.vision-goals {
+    padding: 80px 0;
+    background: url('/assets/images/goals-bg.jpg') center/cover fixed;
+    color: white;
+}
+
+.goals-list {
+    list-style: none;
+    padding: 0;
+    max-width: 800px;
+    margin: 40px auto;
+}
+
+.goal-item {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    margin: 15px 0;
+    padding: 20px 30px;
+    border-radius: 8px;
+    font-size: 1.1rem;
+    display: flex;
+    align-items: center;
+}
+
+.goal-item::before {
+    content: '✓';
+    margin-right: 15px;
+    color: #4CAF50;
+    font-weight: bold;
+}
+
+/* CTA Section */
+.cta-join {
+    padding: 100px 0;
+    text-align: center;
+    background: linear-gradient(135deg, #2196F3, #673AB7);
+    color: white;
+}
+
+.btn-primary {
+    display: inline-block;
+    padding: 15px 40px;
+    background: #4CAF50;
+    color: white;
+    text-decoration: none;
+    border-radius: 30px;
+    font-size: 1.2rem;
+    font-weight: 500;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    margin-top: 30px;
+}
+
+.btn-primary:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 5px 20px rgba(76, 175, 80, 0.4);
+}
+
+/* Responsive container */
+.vision-container,
+.impact-container,
+.goals-container,
+.cta-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 20px;
+}
+
+/* Section titles */
+.impact-title,
+.goals-title,
+.cta-title {
+    font-family: 'Poppins', sans-serif;
+    font-size: 2.5rem;
+    font-weight: 600;
+    text-align: center;
+    margin-bottom: 2rem;
+}

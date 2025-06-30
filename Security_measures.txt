@@ -1,0 +1,29 @@
+CholoSave Security Measures by Breach Quadrilateral
+
+Infiltration
+
+- Password Hashing - Use bcrypt or Argon2 to store passwords securely.
+- Rate Limiting for Login Attempts - Protect against brute-force login attacks.
+- 2FA (Two-Factor Authentication) - Add OTP verification for sensitive logins/actions.
+- CAPTCHA on Forms - Stop bots from accessing login and signup.
+
+Propagation
+
+- Role-Based Access Control (RBAC) - Define clear permissions for users/admins.
+- Group-Based Access Control - Ensure group data is isolated from other groups.
+- Secure API Authorization - Use tokens (like Laravel Sanctum or Passport).
+- Session Management - Regenerate session IDs, auto-expire inactive sessions.
+
+Aggregation
+
+- Input Validation & Sanitization - Stop SQL injection and XSS attempts.
+- Authorization Checks on Data Access - Revalidate ownership before query execution.
+- Admin Logs - Track sensitive operations like fund approval or role changes.
+- Fraud Detection Alerts - Detect abnormal transaction behaviors or access patterns.
+
+Exfiltration
+
+- Encrypt Sensitive Data at Rest - Use encryption for stored emergency fund, investment data.
+- HTTPS Only (SSL/TLS) - Prevent sniffing or MITM attacks during data transmission.
+- User Activity Logs - Log user actions to detect and investigate data leaks.
+- Email/SMS Alerts - Notify users/admins of critical events like withdrawal or logins
