@@ -1,8 +1,31 @@
 <?php
+// --- Secure Session Management ---
+ini_set('session.cookie_httponly', 1);
+ini_set('session.cookie_secure', 1);
+ini_set('session.cookie_samesite', 'Strict');
 session_start();
 
-if (!isset($_SESSION['group_id'])) {
-    header("Location: /test_project/error_page.php"); // Redirect if group_id is not set
+// --- HTTPS Enforcement ---
+if (empty($_SERVER['HTTPS']) || $_SERVER['HTTPS'] === 'off') {
+    if ($_SERVER['HTTP_HOST'] !== 'localhost' && $_SERVER['HTTP_HOST'] !== '127.0.0.1') {
+        header('Location: https://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
+        exit();
+    }
+}
+
+// --- Session Timeout (optional, 30 min) ---
+$timeout = 1800;
+if (isset($_SESSION['LAST_ACTIVITY']) && (time() - $_SESSION['LAST_ACTIVITY'] > $timeout)) {
+    session_unset();
+    session_destroy();
+    header('Location: /CholoSave-CS/login.php');
+    exit();
+}
+$_SESSION['LAST_ACTIVITY'] = time();
+
+if (!isset($_SESSION['group_id']) || !isset($_SESSION['user_id'])) {
+    error_log('[MEMBER LOG] Unauthorized access attempt at ' . date('c'));
+    header('Location: /test_project/error_page.php');
     exit;
 }
 
@@ -43,20 +66,11 @@ function fetchSingleValue($conn, $query, $param)
 }
 
 $total_group_savings = fetchSingleValue($conn, $total_group_savings_query, $group_id);
-
-
 $this_month_savings = fetchSingleValue($conn, $month_savings_query, $group_id);
-
-
 $total_members = fetchSingleValue($conn, $total_members_query, $group_id);
-
-
 $new_members = fetchSingleValue($conn, $new_members_query, $group_id);
-
 $emergency_fund = fetchSingleValue($conn, $emergency_query, $group_id);
-
 $due_loans = fetchSingleValue($conn, $due_loans_query, $group_id);
-
 $total_withdrawals = fetchSingleValue($conn, $total_withdrawals_query, $group_id);
 
 function calculateMySavings($conn, $user_id, $group_id) {
@@ -171,8 +185,8 @@ $my_savings = calculateMySavings($conn, $user_id, $group_id);
                             <div>
                                 <h3 class="text-white-500 font-semibold">Total Savings</h3>
                                 <p class="text-2xl font-bold" id="savings-counter">
-                                    $<?php echo number_format($total_group_savings, 2); ?></p>
-                                <p class="text-green-500 text-sm">+BDT <?php echo number_format($this_month_savings, 2); ?>
+                                    $<?php echo htmlspecialchars(number_format($total_group_savings, 2)); ?></p>
+                                <p class="text-green-500 text-sm">+BDT <?php echo htmlspecialchars(number_format($this_month_savings, 2)); ?>
                                     this month</p>
                             </div>
                             <div class="text-2xl text-gray-400">
@@ -185,8 +199,8 @@ $my_savings = calculateMySavings($conn, $user_id, $group_id);
                         <div class="flex justify-between items-center">
                             <div>
                                 <h3 class="text-white-500 font-semibold">Members</h3>
-                                <p class="text-2xl font-bold" id="members-counter"><?php echo $total_members; ?></p>
-                                <p class="text-green-500 text-sm">+<?php echo $new_members; ?> new this month</p>
+                                <p class="text-2xl font-bold" id="members-counter"><?php echo htmlspecialchars($total_members); ?></p>
+                                <p class="text-green-500 text-sm">+<?php echo htmlspecialchars($new_members); ?> new this month</p>
                             </div>
                             <div class="text-2xl text-gray-400">
                                 <i class="fas fa-users"></i>
@@ -199,7 +213,7 @@ $my_savings = calculateMySavings($conn, $user_id, $group_id);
                             <div>
                                 <h3 class="text-white-500 font-semibold">Emergency Fund</h3>
                                 <p class="text-2xl font-bold" id="fund-counter">
-                                    $<?php echo number_format($emergency_fund, 2); ?></p>
+                                    $<?php echo htmlspecialchars(number_format($emergency_fund, 2)); ?></p>
                             </div>
                             <div class="text-2xl text-gray-400">
                                 <i class="fas fa-piggy-bank"></i>
@@ -212,7 +226,7 @@ $my_savings = calculateMySavings($conn, $user_id, $group_id);
                             <div>
                                 <h3 class="text-white-500 font-semibold">Member's Due Loans</h3>
                                 <p class="text-2xl font-bold" id="loans-counter">
-                                    $<?php echo number_format($due_loans, 2); ?></p>
+                                    $<?php echo htmlspecialchars(number_format($due_loans, 2)); ?></p>
                             </div>
                             <div class="text-2xl text-gray-400">
                                 <i class="fas fa-hand-holding-usd"></i>
@@ -225,7 +239,7 @@ $my_savings = calculateMySavings($conn, $user_id, $group_id);
                             <div>
                                 <h3 class="text-white-500 font-semibold">My Withdrawals</h3>
                                 <p class="text-2xl font-bold" id="withdrawals-counter">
-                                    $<?php echo number_format($total_withdrawals, 2); ?></p>
+                                    $<?php echo htmlspecialchars(number_format($total_withdrawals, 2)); ?></p>
                             </div>
                             <div class="text-2xl text-gray-400">
                                 <i class="fas fa-credit-card"></i>
@@ -237,7 +251,7 @@ $my_savings = calculateMySavings($conn, $user_id, $group_id);
         <div>
             <h3 class="text-white-500 font-semibold">My Savings</h3>
             <p class="text-2xl font-bold" id="my-savings-counter">
-                $<?php echo number_format($my_savings, 2); ?></p>
+                $<?php echo htmlspecialchars(number_format($my_savings, 2)); ?></p>
         </div>
         <div class="text-2xl text-gray-400">
             <i class="fas fa-wallet"></i>
