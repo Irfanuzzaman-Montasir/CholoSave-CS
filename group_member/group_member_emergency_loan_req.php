@@ -1,36 +1,117 @@
 <?php
+// --- Secure Session Settings ---
+ini_set('session.cookie_httponly', 1);
+ini_set('session.cookie_secure', 1);
+ini_set('session.use_strict_mode', 1);
+ini_set('session.cookie_samesite', 'Strict');
+
+// --- Start Session ---
 session_start();
 
-$group_id = $_SESSION['group_id'];
-$user_id = $_SESSION['user_id'];
-if (!isset($_SESSION['group_id']) || !isset($_SESSION['user_id'])) {
-    header("Location: /test_project/error_page.php");
-    exit;
+// --- Enforce HTTPS (except localhost/127.0.0.1) ---
+if (!isset($_SERVER['HTTPS']) || $_SERVER['HTTPS'] !== 'on') {
+    if ($_SERVER['HTTP_HOST'] !== 'localhost' && $_SERVER['HTTP_HOST'] !== '127.0.0.1') {
+        header("Location: https://" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
+        exit();
+    }
 }
 
+// --- Include DB Connection ---
 if (!isset($conn)) {
     include 'db.php';
 }
 
+// --- Security Utility Functions ---
+function sanitize_input($data) {
+    $data = trim($data);
+    $data = stripslashes($data);
+    $data = htmlspecialchars($data, ENT_QUOTES, 'UTF-8');
+    return $data;
+}
+function log_security_event($event_type, $details, $ip_address) {
+    global $conn;
+    if (!$conn) return;
+    $stmt = $conn->prepare("INSERT INTO security_logs (event_type, details, ip_address, timestamp) VALUES (?, ?, ?, NOW())");
+    $stmt->bind_param("sss", $event_type, $details, $ip_address);
+    $stmt->execute();
+    $stmt->close();
+}
+
+// --- CSRF Token Generation ---
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// --- Session & Authorization Checks ---
+if (!isset($_SESSION['group_id']) || !isset($_SESSION['user_id'])) {
+    header("Location: /test_project/error_page.php");
+    exit;
+}
+$group_id = $_SESSION['group_id'];
+$user_id = $_SESSION['user_id'];
+$ip_address = $_SERVER['REMOTE_ADDR'];
+
+// --- Authorization: Ensure user is a member of the group ---
+$authQuery = "SELECT status FROM group_membership WHERE user_id = ? AND group_id = ? AND status = 'approved'";
+$authStmt = $conn->prepare($authQuery);
+$authStmt->bind_param('ii', $user_id, $group_id);
+$authStmt->execute();
+$authStmt->store_result();
+if ($authStmt->num_rows === 0) {
+    log_security_event('UNAUTHORIZED_ACCESS', 'User tried to access loan request for group not a member of', $ip_address);
+    $authStmt->close();
+    header("Location: /test_project/error_page.php");
+    exit;
+}
+$authStmt->close();
+
 $errors = [];
 
+// --- Rate Limiting (optional, simple) ---
+$rate_limit = 3; // Number of requests allowed
+$rate_limit_time = 300; // 5 minutes
+if (!isset($_SESSION['loan_req_rate'])) {
+    $_SESSION['loan_req_rate'] = [
+        'count' => 0,
+        'start_time' => time(),
+        'ip' => $ip_address
+    ];
+}
+if (time() - $_SESSION['loan_req_rate']['start_time'] > $rate_limit_time) {
+    $_SESSION['loan_req_rate'] = [
+        'count' => 0,
+        'start_time' => time(),
+        'ip' => $ip_address
+    ];
+}
+
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    // Sanitize and validate input
-    $amount = filter_var($_POST['amount'], FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
-    $reason = htmlspecialchars(trim($_POST['reason']), ENT_QUOTES, 'UTF-8');
-    $returnDate = $_POST['returnDate'];
+    // --- CSRF Token Check ---
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        log_security_event('CSRF_ATTEMPT', 'Invalid CSRF token on loan request', $ip_address);
+        $errors['csrf'] = 'Invalid form submission. Please refresh and try again.';
+    }
+
+    // --- Rate Limit Check ---
+    if ($_SESSION['loan_req_rate']['count'] >= $rate_limit) {
+        log_security_event('LOAN_RATE_LIMIT', 'Loan request rate limit exceeded', $ip_address);
+        $errors['rate_limit'] = 'Too many loan requests. Please try again later.';
+    }
+
+    // --- Sanitize and Validate Input ---
+    $amount = isset($_POST['amount']) ? filter_var($_POST['amount'], FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION) : '';
+    $reason = isset($_POST['reason']) ? sanitize_input($_POST['reason']) : '';
+    $returnDate = isset($_POST['returnDate']) ? sanitize_input($_POST['returnDate']) : '';
     $currentDate = date('Y-m-d');
 
     // Validate loan amount
     if (!is_numeric($amount) || $amount <= 0) {
         $errors['amount'] = 'Please enter a valid loan amount.';
     }
-
     // Validate reason
     if (empty($reason)) {
         $errors['reason'] = 'Please provide a reason for the loan request.';
     }
-
     // Validate return date
     if ($returnDate < $currentDate) {
         $errors['returnDate'] = 'Return date must be today or later.';
@@ -63,7 +144,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $loanCheckStmt->bind_param('ii', $user_id, $group_id);
             $loanCheckStmt->execute();
             $loanCheckStmt->store_result();
-            
             if ($loanCheckStmt->num_rows > 0) {
                 $errors['outstanding_loan'] = 'You have an outstanding loan request in this group.';
             }
@@ -98,6 +178,31 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
     }
 
+    // --- CAPTCHA Check ---
+    if (!isset($_POST['cf-turnstile-response'])) {
+        $errors['captcha'] = 'Please complete the security verification.';
+    } else {
+        $turnstile_response = $_POST['cf-turnstile-response'];
+        $turnstile_secret = "0x4AAAAAABV06DJH3sKKe6kuwz8k4tbcMBs"; // Real secret key
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, 'https://challenges.cloudflare.com/turnstile/v0/siteverify');
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
+            'secret' => $turnstile_secret,
+            'response' => $turnstile_response
+        ]));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        $verify_response = curl_exec($ch);
+        $curl_error = curl_error($ch);
+        curl_close($ch);
+        $response_data = json_decode($verify_response);
+        if ($curl_error || $response_data === null || !isset($response_data->success) || !$response_data->success) {
+            $errors['captcha'] = 'Please complete the security verification.';
+        }
+    }
+
     // If no errors, proceed with loan request and poll creation
     if (empty($errors)) {
         $conn->begin_transaction(); // Start transaction for multiple operations
@@ -118,8 +223,52 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $pollStmt->execute();
             $pollStmt->close();
 
-            $conn->commit(); // Commit transaction
+            // Fetch user's email and group name for notification
+            $userEmail = '';
+            $groupName = '';
+            $userEmailQuery = "SELECT email FROM users WHERE id = ?";
+            $userEmailStmt = $conn->prepare($userEmailQuery);
+            $userEmailStmt->bind_param('i', $user_id);
+            $userEmailStmt->execute();
+            $userEmailStmt->bind_result($userEmail);
+            $userEmailStmt->fetch();
+            $userEmailStmt->close();
+            $groupNameQuery = "SELECT group_name FROM my_group WHERE group_id = ?";
+            $groupNameStmt = $conn->prepare($groupNameQuery);
+            $groupNameStmt->bind_param('i', $group_id);
+            $groupNameStmt->execute();
+            $groupNameStmt->bind_result($groupName);
+            $groupNameStmt->fetch();
+            $groupNameStmt->close();
 
+            // Send email notification using PHPMailer
+            require_once __DIR__ . '/../vendor/phpmailer/phpmailer/src/PHPMailer.php';
+            require_once __DIR__ . '/../vendor/phpmailer/phpmailer/src/SMTP.php';
+            require_once __DIR__ . '/../vendor/phpmailer/phpmailer/src/Exception.php';
+            $mail = new PHPMailer\PHPMailer\PHPMailer(true);
+            try {
+                $mail->isSMTP();
+                $mail->Host = 'smtp.gmail.com';
+                $mail->SMTPAuth = true;
+                $mail->Username = 'cholosave.uiu@gmail.com';
+                $mail->Password = 'yayd tytg zrwt igjw'; // Use App Password
+                $mail->SMTPSecure = PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+                $mail->Port = 587;
+                $mail->setFrom('cholosave.uiu@gmail.com', 'CholoSave');
+                $mail->addAddress($userEmail);
+                $mail->isHTML(true);
+                $mail->Subject = 'Loan Request Submitted';
+                $mail->Body = "Dear $userName,<br><br>Your loan request of <b>BDT $amount</b> has been submitted for the group <b>$groupName</b>.<br><br>We will notify you once it is approved or rejected.<br><br>Thank you for using CholoSave.";
+                $mail->send();
+                log_security_event('LOAN_REQUEST_EMAIL_SENT', 'Loan request email sent to user: ' . $userEmail, $ip_address);
+            } catch (Exception $e) {
+                log_security_event('LOAN_REQUEST_EMAIL_ERROR', 'Loan request email error for user: ' . $userEmail . ' - ' . $mail->ErrorInfo, $ip_address);
+                // Do not block the transaction for email failure
+            }
+
+            $conn->commit(); // Commit transaction
+            $_SESSION['loan_req_rate']['count']++;
+            log_security_event('LOAN_REQUEST_SUCCESS', 'Loan request submitted and poll created', $ip_address);
             // Show success message
             echo "<script>
                     document.addEventListener('DOMContentLoaded', function() {
@@ -129,13 +278,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             icon: 'success',
                             confirmButtonText: 'OK'
                         }).then(() => {
-                            window.location.href = '/test_project/group_member/group_member_emergency_loan_req.php';
+                            window.location.href = '/CholoSave-CS/group_member/group_member_emergency_loan_req.php';
                         });
                     });
                   </script>";
-
         } catch (Exception $e) {
             $conn->rollback(); // Rollback on error
+            log_security_event('LOAN_REQUEST_ERROR', 'Error processing loan request: ' . $e->getMessage(), $ip_address);
             $errors['submission'] = 'Error processing loan request: ' . $e->getMessage();
         }
     }
@@ -143,6 +292,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     // Display any errors
     if (!empty($errors)) {
         $errorMessage = implode('\n', $errors);
+        log_security_event('LOAN_REQUEST_FAILED', $errorMessage, $ip_address);
         echo "<script>
                 document.addEventListener('DOMContentLoaded', function() {
                     Swal.fire({
@@ -255,6 +405,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
                         <!-- Loan Request Form -->
                         <form method="POST" class="space-y-6">
+                            <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                             <div class="space-y-6">
                                 <!-- Amount Field -->
                                 <div>
@@ -369,18 +520,24 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 </div>
                             </div>
 
+                            <!-- CAPTCHA (Cloudflare Turnstile) -->
+                            <div class="mb-6">
+                                <div class="cf-turnstile" data-sitekey="0x4AAAAAABV06Eefv4-cjRt7" data-theme="light"></div>
+                                <div id="captchaError" class="text-red-500 text-sm mt-2">
+                                    <?php echo isset($errors['captcha']) ? $errors['captcha'] : ''; ?>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Submit Button -->
+                        <div class="pt-4">
+                            <button type="submit"
+                                class="w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-150 ease-in-out font-medium">
+                                <i class="fas fa-paper-plane mr-2"></i> Submit Loan Request
+                            </button>
+                        </div>
+                        </form>
                     </div>
-
-
-
-                    <!-- Submit Button -->
-                    <div class="pt-4">
-                        <button type="submit"
-                            class="w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-150 ease-in-out font-medium">
-                            <i class="fas fa-paper-plane mr-2"></i> Submit Loan Request
-                        </button>
-                    </div>
-                    </form>
                 </div>
             </div>
         </div>
@@ -434,6 +591,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         });
 
     </script>
+    <!-- Cloudflare Turnstile JS -->
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </body>
 
 </html>
