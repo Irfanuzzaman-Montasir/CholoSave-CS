@@ -1,16 +1,62 @@
 <?php
+// --- Secure Session Settings ---
+ini_set('session.cookie_httponly', 1);
+ini_set('session.cookie_secure', 1);
+ini_set('session.use_strict_mode', 1);
+ini_set('session.cookie_samesite', 'Strict');
+
+// --- Enforce HTTPS (except localhost/127.0.0.1) ---
+if (!isset($_SERVER['HTTPS']) || $_SERVER['HTTPS'] !== 'on') {
+    if ($_SERVER['HTTP_HOST'] !== 'localhost' && $_SERVER['HTTP_HOST'] !== '127.0.0.1') {
+        header("Location: https://" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
+        exit();
+    }
+}
+
 session_start();
 
-if (!isset($_SESSION['user_id'])) {
+// --- Security Utility Functions ---
+function sanitize_input($data) {
+    $data = trim($data);
+    $data = stripslashes($data);
+    $data = htmlspecialchars($data, ENT_QUOTES, 'UTF-8');
+    return $data;
+}
+function log_activity($user_id, $group_id, $action, $details = null) {
+    global $conn;
+    $stmt = $conn->prepare("INSERT INTO activity_log (user_id, group_id, action, details) VALUES (?, ?, ?, ?)");
+    $stmt->bind_param("iiss", $user_id, $group_id, $action, $details);
+    $stmt->execute();
+    $stmt->close();
+}
+
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['group_id'])) {
     header("Location: /CholoSave-CS/error_page.php");
     exit;
 }
 
 $user_id = $_SESSION['user_id'];
+$group_id = $_SESSION['group_id'];
 
 if (!isset($conn)) {
     include 'db.php';
 }
+
+// --- Authorization: Ensure user is a member of the group ---
+$authQuery = "SELECT status FROM group_membership WHERE user_id = ? AND group_id = ? AND status = 'approved'";
+$authStmt = $conn->prepare($authQuery);
+$authStmt->bind_param('ii', $user_id, $group_id);
+$authStmt->execute();
+$authStmt->store_result();
+if ($authStmt->num_rows === 0) {
+    $authStmt->close();
+    header("Location: /CholoSave-CS/error_page.php");
+    exit;
+}
+$authStmt->close();
+
+// --- Activity Log: Log access to payment history ---
+log_activity($user_id, $group_id, 'view_payment_history', json_encode(['ip' => $_SERVER['REMOTE_ADDR'] ?? '']));
 
 $paymentHistoryQuery = "
     SELECT 
@@ -24,7 +70,7 @@ $paymentHistoryQuery = "
 ";
 
 if ($stmt = $conn->prepare($paymentHistoryQuery)) {
-    $stmt->bind_param('ii', $user_id, $_SESSION['group_id']);
+    $stmt->bind_param('ii', $user_id, $group_id);
     $stmt->execute();
     $paymentHistoryResult = $stmt->get_result();
 } else {
@@ -140,15 +186,15 @@ if ($stmt = $conn->prepare($paymentHistoryQuery)) {
                                         $serial = 1;
                                         while ($row = $paymentHistoryResult->fetch_assoc()) {
                                             echo "<tr class='hover:bg-gray-50 transition-colors duration-150'>";
-                                            echo "<td class='px-6 py-4 whitespace-nowrap text-sm text-gray-500'>" . $serial++ . "</td>";
+                                            echo "<td class='px-6 py-4 whitespace-nowrap text-sm text-gray-500'>" . htmlspecialchars($serial++, ENT_QUOTES, 'UTF-8') . "</td>";
                                             echo "<td class='px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900'>" . htmlspecialchars($row['transaction_id'], ENT_QUOTES, 'UTF-8') . "</td>";
-                                            echo "<td class='px-6 py-4 whitespace-nowrap text-sm text-gray-900'>" . number_format($row['amount']) . "</td>";
+                                            echo "<td class='px-6 py-4 whitespace-nowrap text-sm text-gray-900'>" . htmlspecialchars(number_format($row['amount']), ENT_QUOTES, 'UTF-8') . "</td>";
                                             echo "<td class='px-6 py-4 whitespace-nowrap text-sm text-gray-500'>
                                                     <span class='px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800'>
                                                         " . htmlspecialchars($row['payment_method'], ENT_QUOTES, 'UTF-8') . "
                                                     </span>
                                                   </td>";
-                                            echo "<td class='px-6 py-4 whitespace-nowrap text-sm text-gray-500'>" . date('M d, Y H:i', strtotime($row['payment_time'])) . "</td>";
+                                            echo "<td class='px-6 py-4 whitespace-nowrap text-sm text-gray-500'>" . htmlspecialchars(date('M d, Y H:i', strtotime($row['payment_time'])), ENT_QUOTES, 'UTF-8') . "</td>";
                                             echo "</tr>";
                                         }
                                     } else {
