@@ -1,22 +1,57 @@
 <?php
+// --- Secure Session Settings ---
+ini_set('session.cookie_httponly', 1);
+ini_set('session.cookie_secure', 1);
+ini_set('session.use_strict_mode', 1);
+ini_set('session.cookie_samesite', 'Strict');
+
+// --- Start Session ---
 session_start();
 
-// Check if group_id and user_id are set in session
-if (!isset($_SESSION['group_id']) || !isset($_SESSION['user_id'])) {
-    header("Location: /CholoSave-CS/error_page.php"); // Redirect if session variables are missing
-    exit;
+// --- Enforce HTTPS (except localhost/127.0.0.1) ---
+if (!isset($_SERVER['HTTPS']) || $_SERVER['HTTPS'] !== 'on') {
+    if ($_SERVER['HTTP_HOST'] !== 'localhost' && $_SERVER['HTTP_HOST'] !== '127.0.0.1') {
+        header("Location: https://" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
+        exit();
+    }
 }
 
-$group_id = $_SESSION['group_id'];
-$user_id = $_SESSION['user_id'];
-
-// Ensure database connection
+// --- Include DB Connection ---
 if (!isset($conn)) {
     include 'db.php';
 }
 
+// --- Security Utility Functions ---
+function sanitize_input($data) {
+    $data = trim($data);
+    $data = stripslashes($data);
+    $data = htmlspecialchars($data, ENT_QUOTES, 'UTF-8');
+    return $data;
+}
+function log_security_event($event_type, $details, $ip_address) {
+    global $conn;
+    if (!$conn) return;
+    $stmt = $conn->prepare("INSERT INTO security_logs (event_type, details, ip_address, timestamp) VALUES (?, ?, ?, NOW())");
+    $stmt->bind_param("sss", $event_type, $details, $ip_address);
+    $stmt->execute();
+    $stmt->close();
+}
 
-// Check if the user is an admin for the group
+// --- CSRF Token Generation ---
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// --- Session & Authorization Checks ---
+if (!isset($_SESSION['group_id']) || !isset($_SESSION['user_id'])) {
+    header("Location: /CholoSave-CS/error_page.php");
+    exit;
+}
+$group_id = $_SESSION['group_id'];
+$user_id = $_SESSION['user_id'];
+$ip_address = $_SERVER['REMOTE_ADDR'];
+
+// --- Authorization: Ensure user is admin of the group ---
 $is_admin = false;
 $checkAdminQuery = "SELECT group_admin_id FROM my_group WHERE group_id = ?";
 if ($stmt = $conn->prepare($checkAdminQuery)) {
@@ -25,38 +60,38 @@ if ($stmt = $conn->prepare($checkAdminQuery)) {
     $stmt->bind_result($group_admin_id);
     $stmt->fetch();
     $stmt->close();
-    
-    // If the user is the admin of the group, proceed; otherwise, redirect to an error page
     if ($group_admin_id === $user_id) {
         $is_admin = true;
     }
 }
-
 if (!$is_admin) {
-    // Redirect to error page if the user is not an admin
+    log_security_event('UNAUTHORIZED_ACCESS', 'Non-admin tried to access admin withdrawal for group', $ip_address);
     header("Location: /CholoSave-CS/error_page.php");
     exit;
 }
 
-
-$errors = []; // To store validation errors
+$errors = [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Sanitize and validate input
-    $amount = filter_var($_POST['amount'], FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
-    $payment_number = htmlspecialchars(trim($_POST['payment_number']), ENT_QUOTES, 'UTF-8');
-    $payment_method = htmlspecialchars(trim($_POST['payment_method']), ENT_QUOTES, 'UTF-8');
+    // --- CSRF Token Check ---
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        log_security_event('CSRF_ATTEMPT', 'Invalid CSRF token on admin withdrawal request', $ip_address);
+        $errors['csrf'] = 'Invalid form submission. Please refresh and try again.';
+    }
+
+    // --- Sanitize and Validate Input ---
+    $amount = isset($_POST['amount']) ? filter_var($_POST['amount'], FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION) : '';
+    $payment_number = isset($_POST['payment_number']) ? sanitize_input($_POST['payment_number']) : '';
+    $payment_method = isset($_POST['payment_method']) ? sanitize_input($_POST['payment_method']) : '';
 
     // Validate amount
     if (!is_numeric($amount) || $amount <= 0) {
         $errors['amount'] = 'Please enter a valid withdrawal amount.';
     }
-
     // Validate payment number
     if (empty($payment_number)) {
         $errors['payment_number'] = 'Please provide a payment number.';
     }
-
     // Validate payment method
     if (empty($payment_method)) {
         $errors['payment_method'] = 'Please select a payment method.';
@@ -71,7 +106,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->bind_result($total_savings);
             $stmt->fetch();
             $stmt->close();
-
             if ($total_savings < $amount) {
                 $errors['amount'] = 'Insufficient savings for the requested withdrawal.';
             }
@@ -80,31 +114,130 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    // --- CAPTCHA Check ---
+    if (!isset($_POST['cf-turnstile-response'])) {
+        $errors['captcha'] = 'Please complete the security verification.';
+    } else {
+        $turnstile_response = $_POST['cf-turnstile-response'];
+        $turnstile_secret = "0x4AAAAAABV06DJH3sKKe6kuwz8k4tbcMBs"; // Real secret key
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, 'https://challenges.cloudflare.com/turnstile/v0/siteverify');
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
+            'secret' => $turnstile_secret,
+            'response' => $turnstile_response
+        ]));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        $verify_response = curl_exec($ch);
+        $curl_error = curl_error($ch);
+        curl_close($ch);
+        $response_data = json_decode($verify_response);
+        if ($curl_error || $response_data === null || !isset($response_data->success) || !$response_data->success) {
+            $errors['captcha'] = 'Please complete the security verification.';
+        }
+    }
+
     // If no errors, insert the withdrawal request
     if (empty($errors)) {
-        $withdrawalQuery = "INSERT INTO withdrawal (user_id, group_id, amount, payment_number, payment_method) VALUES (?, ?, ?, ?, ?)";
-        if ($stmt = $conn->prepare($withdrawalQuery)) {
+        $conn->begin_transaction();
+        try {
+            $withdrawalQuery = "INSERT INTO withdrawal (user_id, group_id, amount, payment_number, payment_method) VALUES (?, ?, ?, ?, ?)";
+            $stmt = $conn->prepare($withdrawalQuery);
             $stmt->bind_param('iisss', $user_id, $group_id, $amount, $payment_number, $payment_method);
-            if ($stmt->execute()) {
-                echo "<script>
-                        document.addEventListener('DOMContentLoaded', function() {
-                            Swal.fire({
-                                title: 'Success!',
-                                text: 'Withdrawal request submitted successfully.',
-                                icon: 'success',
-                                confirmButtonText: 'OK'
-                            }).then(() => {
-                                window.location.href = '/CholoSave-CS/group_admin/group_admin_withdraw_request.php';
-                            });
-                        });
-                      </script>";
-            } else {
-                $errors['submission'] = 'Error submitting withdrawal request.';
-            }
+            $stmt->execute();
             $stmt->close();
-        } else {
-            $errors['query'] = 'Error preparing withdrawal request query.';
+
+            // Log activity for withdrawal request
+            $log_action = 'request_withdrawal';
+            $log_details = json_encode(['amount' => $amount, 'payment_number' => $payment_number, 'payment_method' => $payment_method]);
+            $log_stmt = $conn->prepare("INSERT INTO activity_log (user_id, group_id, action, details) VALUES (?, ?, ?, ?)");
+            if ($log_stmt) {
+                $log_stmt->bind_param("iiss", $user_id, $group_id, $log_action, $log_details);
+                $log_stmt->execute();
+                $log_stmt->close();
+            }
+
+            // Fetch admin's email and group name for notification
+            $userEmail = '';
+            $groupName = '';
+            $userName = '';
+            $userEmailQuery = "SELECT email, name FROM users WHERE id = ?";
+            $userEmailStmt = $conn->prepare($userEmailQuery);
+            $userEmailStmt->bind_param('i', $user_id);
+            $userEmailStmt->execute();
+            $userEmailStmt->bind_result($userEmail, $userName);
+            $userEmailStmt->fetch();
+            $userEmailStmt->close();
+            $groupNameQuery = "SELECT group_name FROM my_group WHERE group_id = ?";
+            $groupNameStmt = $conn->prepare($groupNameQuery);
+            $groupNameStmt->bind_param('i', $group_id);
+            $groupNameStmt->execute();
+            $groupNameStmt->bind_result($groupName);
+            $groupNameStmt->fetch();
+            $groupNameStmt->close();
+
+            // Send email notification using PHPMailer
+            require_once __DIR__ . '/../vendor/phpmailer/phpmailer/src/PHPMailer.php';
+            require_once __DIR__ . '/../vendor/phpmailer/phpmailer/src/SMTP.php';
+            require_once __DIR__ . '/../vendor/phpmailer/phpmailer/src/Exception.php';
+            $mail = new PHPMailer\PHPMailer\PHPMailer(true);
+            try {
+                $mail->isSMTP();
+                $mail->Host = 'smtp.gmail.com';
+                $mail->SMTPAuth = true;
+                $mail->Username = 'cholosave.uiu@gmail.com';
+                $mail->Password = 'yayd tytg zrwt igjw'; // Use App Password
+                $mail->SMTPSecure = PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+                $mail->Port = 587;
+                $mail->setFrom('cholosave.uiu@gmail.com', 'CholoSave');
+                $mail->addAddress($userEmail);
+                $mail->isHTML(true);
+                $mail->Subject = 'Admin Withdrawal Request Submitted';
+                $mail->Body = "Dear $userName,<br><br>Your withdrawal request of <b>BDT $amount</b> as group admin has been submitted for the group <b>$groupName</b>.<br><br>We will notify you once it is processed.<br><br>Thank you for using CholoSave.";
+                $mail->send();
+                log_security_event('ADMIN_WITHDRAWAL_REQUEST_EMAIL_SENT', 'Admin withdrawal request email sent to user: ' . $userEmail, $ip_address);
+            } catch (Exception $e) {
+                log_security_event('ADMIN_WITHDRAWAL_REQUEST_EMAIL_ERROR', 'Admin withdrawal request email error for user: ' . $userEmail . ' - ' . $mail->ErrorInfo, $ip_address);
+                // Do not block the transaction for email failure
+            }
+
+            $conn->commit();
+            log_security_event('ADMIN_WITHDRAWAL_REQUEST_SUCCESS', 'Admin withdrawal request submitted', $ip_address);
+            echo "<script>
+                    document.addEventListener('DOMContentLoaded', function() {
+                        Swal.fire({
+                            title: 'Success!',
+                            text: 'Withdrawal request submitted successfully.',
+                            icon: 'success',
+                            confirmButtonText: 'OK'
+                        }).then(() => {
+                            window.location.href = '/CholoSave-CS/group_admin/group_admin_withdraw_request.php';
+                        });
+                    });
+                  </script>";
+        } catch (Exception $e) {
+            $conn->rollback();
+            log_security_event('ADMIN_WITHDRAWAL_REQUEST_ERROR', 'Error processing admin withdrawal request: ' . $e->getMessage(), $ip_address);
+            $errors['submission'] = 'Error processing withdrawal request: ' . $e->getMessage();
         }
+    }
+
+    // Display any errors
+    if (!empty($errors)) {
+        $errorMessage = implode('\n', $errors);
+        log_security_event('ADMIN_WITHDRAWAL_REQUEST_FAILED', $errorMessage, $ip_address);
+        echo "<script>
+                document.addEventListener('DOMContentLoaded', function() {
+                    Swal.fire({
+                        title: 'Error!',
+                        text: '$errorMessage',
+                        icon: 'error',
+                        confirmButtonText: 'OK'
+                    });
+                });
+              </script>";
     }
 }
 ?>
@@ -159,6 +292,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
 
                     <form method="POST" class="space-y-6">
+                        <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                         <div>
                             <label for="amount" class="block text-sm font-medium text-gray-700 mb-2">Withdrawal Amount (BDT)</label>
                             <input type="number" id="amount" name="amount" class="block w-full px-4 py-3 rounded-lg border border-gray-300" placeholder="Enter amount" required>
@@ -185,6 +319,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             </select>
                             <div class="text-red-500 text-sm mt-2">
                                 <?php echo $errors['payment_method'] ?? ''; ?>
+                            </div>
+                        </div>
+
+                        <!-- CAPTCHA (Cloudflare Turnstile) -->
+                        <div class="mb-6">
+                            <div class="cf-turnstile" data-sitekey="0x4AAAAAABV06Eefv4-cjRt7" data-theme="light"></div>
+                            <div id="captchaError" class="text-red-500 text-sm mt-2">
+                                <?php echo isset($errors['captcha']) ? $errors['captcha'] : ''; ?>
                             </div>
                         </div>
 
@@ -244,6 +386,7 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
     });
 });
 </script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </body>
 
 </html>
