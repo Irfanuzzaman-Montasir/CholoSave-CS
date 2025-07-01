@@ -1,26 +1,46 @@
 <?php
+// --- Secure Session Management ---
+ini_set('session.cookie_httponly', 1);
+ini_set('session.cookie_secure', 1);
+ini_set('session.cookie_samesite', 'Strict');
 session_start();
 
-$group_id = $_SESSION['group_id'];
-$user_id = $_SESSION['user_id'];
-
-if (isset($_SESSION['group_id']) && isset($_SESSION['user_id'])) {
-    $group_id = $_SESSION['group_id'];
-    $user_id = $_SESSION['user_id'];
-   
-    // echo 'group_id: '. $group_id; echo 'user_id: '. $user_id;
+// --- HTTPS Enforcement ---
+if (empty($_SERVER['HTTPS']) || $_SERVER['HTTPS'] === 'off') {
+    if ($_SERVER['HTTP_HOST'] !== 'localhost' && $_SERVER['HTTP_HOST'] !== '127.0.0.1') {
+        header('Location: https://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
+        exit();
+    }
 }
+
+// --- Session Timeout (optional, 30 min) ---
+$timeout = 1800;
+if (isset($_SESSION['LAST_ACTIVITY']) && (time() - $_SESSION['LAST_ACTIVITY'] > $timeout)) {
+    session_unset();
+    session_destroy();
+    header('Location: /CholoSave-CS/login.php');
+    exit();
+}
+$_SESSION['LAST_ACTIVITY'] = time();
+
+// --- CSRF Token Generation ---
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
+
+// --- DB Connection ---
+if (!isset($conn)) {
+    include 'db.php';
+}
+
+// --- Authorization: Check Admin ---
 if (!isset($_SESSION['group_id']) || !isset($_SESSION['user_id'])) {
-    header("Location: /CholoSave-CS/error_page.php"); // Redirect if session variables are missing
+    header('Location: /CholoSave-CS/error_page.php');
     exit;
 }
-
-if (!isset($conn)) {
-    include 'db.php'; // Ensure database connection
-}
-
-
-// Check if the user is an admin for the group
+$group_id = $_SESSION['group_id'];
+$user_id = $_SESSION['user_id'];
 $is_admin = false;
 $checkAdminQuery = "SELECT group_admin_id FROM my_group WHERE group_id = ?";
 if ($stmt = $conn->prepare($checkAdminQuery)) {
@@ -29,61 +49,102 @@ if ($stmt = $conn->prepare($checkAdminQuery)) {
     $stmt->bind_result($group_admin_id);
     $stmt->fetch();
     $stmt->close();
-    
-    // If the user is the admin of the group, proceed; otherwise, redirect to an error page
     if ($group_admin_id === $user_id) {
         $is_admin = true;
     }
 }
-
 if (!$is_admin) {
-    // Redirect to error page if the user is not an admin
-    header("Location: /CholoSave-CS/error_page.php");
+    // Log unauthorized access attempt
+    error_log("[ADMIN LOG] Unauthorized access attempt by user $user_id to group $group_id at " . date('c'));
+    header('Location: /CholoSave-CS/error_page.php');
     exit;
 }
 
+$errors = [];
+$rate_limit = 5; // 5 submissions per hour
+$rate_limit_time = 3600;
+$ip_address = $_SERVER['REMOTE_ADDR'];
 
-$errors = []; // To store validation errors
+// --- Rate Limiting ---
+if (!isset($_SESSION['investment_rate_limit'])) {
+    $_SESSION['investment_rate_limit'] = [
+        'count' => 0,
+        'start_time' => time(),
+        'ip' => $ip_address
+    ];
+}
+if (time() - $_SESSION['investment_rate_limit']['start_time'] > $rate_limit_time) {
+    $_SESSION['investment_rate_limit'] = [
+        'count' => 0,
+        'start_time' => time(),
+        'ip' => $ip_address
+    ];
+}
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    // Sanitize and validate input
+    // --- CSRF Token Check ---
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        error_log("[ADMIN LOG] CSRF token mismatch for user $user_id at " . date('c'));
+        die('Invalid form submission.');
+    }
+    // --- Rate Limiting Check ---
+    if ($_SESSION['investment_rate_limit']['count'] >= $rate_limit) {
+        error_log("[ADMIN LOG] Rate limit exceeded for user $user_id at " . date('c'));
+        $errors['rate_limit'] = 'Too many submissions. Please try again later.';
+    } else {
+        $_SESSION['investment_rate_limit']['count']++;
+    }
+    // --- Authorization Check Again ---
+    $is_admin = false;
+    $stmt = $conn->prepare($checkAdminQuery);
+    $stmt->bind_param('i', $group_id);
+    $stmt->execute();
+    $stmt->bind_result($group_admin_id);
+    $stmt->fetch();
+    $stmt->close();
+    if ($group_admin_id === $user_id) {
+        $is_admin = true;
+    }
+    if (!$is_admin) {
+        error_log("[ADMIN LOG] Unauthorized POST attempt by user $user_id to group $group_id at " . date('c'));
+        die('Unauthorized.');
+    }
+    // --- Input Validation & Sanitization ---
     $amount = filter_var($_POST['amount'], FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
     $investment_type = htmlspecialchars(trim($_POST['investment_type']), ENT_QUOTES, 'UTF-8');
     $expected_return = filter_var($_POST['expected_return'], FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
     $expected_return_date = $_POST['expected_return_date'];
     $currentDate = date('Y-m-d');
-
+    // Input length limits
+    if (strlen($investment_type) > 100) {
+        $errors['investment_type'] = 'Investment type is too long (max 100 chars).';
+    }
     // Validate investment amount
     if (!is_numeric($amount) || $amount <= 0) {
         $errors['amount'] = 'Please enter a valid investment amount.';
     }
-
     // Validate investment type
     if (empty($investment_type)) {
         $errors['investment_type'] = 'Please provide the type of investment.';
     }
-
     // Validate expected return
     if (!is_numeric($expected_return) || $expected_return <= 0) {
         $errors['expected_return'] = 'Please enter a valid expected return amount.';
     }
-
     // Validate expected return date
     if ($expected_return_date < $currentDate) {
         $errors['expected_return_date'] = 'Return date must be today or later.';
     }
-
-    echo "Expected Return Date: " . $expected_return_date;
-
-
+    // --- User/Admin Activity Logging ---
+    error_log("[ADMIN LOG] User $user_id submitted investment for group $group_id at " . date('c'));
     // If no errors, proceed with database insertion
     if (empty($errors)) {
         $investmentQuery = "INSERT INTO investments (group_id, investment_type, amount, ex_return_date, ex_profit) VALUES (?, ?, ?, ?, ?)";
-        
         if ($stmt = $conn->prepare($investmentQuery)) {
             $stmt->bind_param('isids', $group_id, $investment_type, $amount, $expected_return_date, $expected_return);
             if ($stmt->execute()) {
-                // After successful investment insertion, show success message
+                // Log successful insert
+                error_log("[ADMIN LOG] Investment inserted by user $user_id for group $group_id at " . date('c'));
                 echo "<script>
                         document.addEventListener('DOMContentLoaded', function() {
                             Swal.fire({
@@ -98,10 +159,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                       </script>";
             } else {
                 $errors['submission'] = 'Error submitting investment details.';
+                error_log("[ADMIN LOG] DB error for user $user_id: " . $stmt->error);
             }
             $stmt->close();
         } else {
             $errors['query'] = 'Error preparing investment query.';
+            error_log("[ADMIN LOG] Query preparation error for user $user_id at " . date('c'));
         }
     }
 }
@@ -161,6 +224,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
                         <!-- Investment Form -->
                         <form method="POST" class="space-y-6">
+                            <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>">
                             <div class="space-y-6">
                                 <!-- Amount Field -->
                                 <div>
