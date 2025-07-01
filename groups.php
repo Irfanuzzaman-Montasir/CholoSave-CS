@@ -1,4 +1,41 @@
 <?php
+// --- Secure Session Settings ---
+ini_set('session.cookie_httponly', 1);
+ini_set('session.cookie_secure', 1);
+ini_set('session.use_strict_mode', 1);
+ini_set('session.cookie_samesite', 'Strict');
+
+// --- Enforce HTTPS (except localhost/127.0.0.1) ---
+if (!isset($_SERVER['HTTPS']) || $_SERVER['HTTPS'] !== 'on') {
+    if ($_SERVER['HTTP_HOST'] !== 'localhost' && $_SERVER['HTTP_HOST'] !== '127.0.0.1') {
+        header("Location: https://" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
+        exit();
+    }
+}
+
+// --- Start session (if not already started) ---
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// --- Security Utility Functions ---
+function sanitize_input($data) {
+    $data = trim($data);
+    $data = stripslashes($data);
+    $data = htmlspecialchars($data, ENT_QUOTES, 'UTF-8');
+    return $data;
+}
+function log_security_event($event_type, $details, $ip_address) {
+    global $conn;
+    if (!$conn) return;
+    $stmt = $conn->prepare("INSERT INTO security_logs (event_type, details, ip_address, timestamp) VALUES (?, ?, ?, NOW())");
+    $stmt->bind_param("sss", $event_type, $details, $ip_address);
+    $stmt->execute();
+    $stmt->close();
+}
+
+$ip_address = $_SERVER['REMOTE_ADDR'] ?? '';
+
 // Include session, database connection, and header
 include 'session.php';
 include 'db.php';
@@ -6,57 +43,118 @@ include 'includes/header2.php';
 
 // Check if the user is logged in
 if (!isLoggedIn()) {
+    log_security_event('UNAUTHORIZED_ACCESS', 'User not logged in tried to access groups.php', $ip_address);
     echo json_encode(["status" => "error", "message" => "User not logged in."]);
     exit();
 }
 
 $user_id = getUserId();
 
+// --- Rate Limiting for Join Requests ---
+$rate_limit = 3; // Number of join requests allowed
+$rate_limit_time = 300; // 5 minutes
+if (!isset($_SESSION['join_req_rate'])) {
+    $_SESSION['join_req_rate'] = [
+        'count' => 0,
+        'start_time' => time(),
+        'ip' => $ip_address
+    ];
+}
+if (time() - $_SESSION['join_req_rate']['start_time'] > $rate_limit_time) {
+    $_SESSION['join_req_rate'] = [
+        'count' => 0,
+        'start_time' => time(),
+        'ip' => $ip_address
+    ];
+}
+
 if (isset($_POST['join_group'])) {
-    $group_id = $_POST['group_id'];
-
-    // Check if already a member
-    $checkMemberQuery = "SELECT status FROM group_membership WHERE user_id = ? AND group_id = ?";
-    $stmt = $conn->prepare($checkMemberQuery);
-    $stmt->bind_param("ii", $user_id, $group_id);
-    $stmt->execute();
-    $result = $stmt->get_result();
-
-    if ($result->num_rows > 0) {
-        $membership = $result->fetch_assoc();
-        if ($membership['status'] == 'approved') {
-            $_SESSION['message'] = "You are already a member of this group.";
+    // --- Rate Limit Check ---
+    if ($_SESSION['join_req_rate']['count'] >= $rate_limit) {
+        log_security_event('JOIN_RATE_LIMIT', 'Join group rate limit exceeded', $ip_address);
+        $_SESSION['message'] = "Too many join requests. Please try again later.";
+        $_SESSION['message_type'] = "warning";
+    } else {
+        // --- Input Validation & Sanitization ---
+        $group_id = isset($_POST['group_id']) ? intval(sanitize_input($_POST['group_id'])) : 0;
+        if ($group_id <= 0) {
+            log_security_event('INVALID_INPUT', 'Invalid group_id in join request', $ip_address);
+            $_SESSION['message'] = "Invalid group selection.";
             $_SESSION['message_type'] = "warning";
         } else {
-            $_SESSION['message'] = "Your join request is pending approval.";
-            $_SESSION['message_type'] = "info";
-        }
-    } else {
-        // Insert join request
-        $joinQuery = "INSERT INTO group_membership (user_id, group_id, status, join_request_date) VALUES (?, ?, 'pending', NOW())";
-        $stmt = $conn->prepare($joinQuery);
-        $stmt->bind_param("ii", $user_id, $group_id);
-        if ($stmt->execute()) {
-            // Create poll after join request
-            // Fetch the member's name
-            $getMemberNameQuery = "SELECT name FROM users WHERE id = ?";
-            $stmt = $conn->prepare($getMemberNameQuery);
-            $stmt->bind_param("i", $user_id);
+            // Check if already a member
+            $checkMemberQuery = "SELECT status FROM group_membership WHERE user_id = ? AND group_id = ?";
+            $stmt = $conn->prepare($checkMemberQuery);
+            $stmt->bind_param("ii", $user_id, $group_id);
             $stmt->execute();
             $result = $stmt->get_result();
-            $memberName = '';
-            if ($result && $row = $result->fetch_assoc()) {
-                $memberName = $row['name'];
-            }
 
-            // Insert poll into polls table
-            $pollQuestion = "{$memberName} wants to join the group. Do you approve?";
-            $insertPollQuery = "INSERT INTO polls (group_id, poll_question) VALUES (?, ?)";
-            $stmt = $conn->prepare($insertPollQuery);
-            $stmt->bind_param("is", $group_id, $pollQuestion);
-            if ($stmt->execute()) {
-                $_SESSION['message'] = "Join request sent successfully! Please wait for approval.";
-                $_SESSION['message_type'] = "success";
+            if ($result->num_rows > 0) {
+                $membership = $result->fetch_assoc();
+                if ($membership['status'] == 'approved') {
+                    $_SESSION['message'] = "You are already a member of this group.";
+                    $_SESSION['message_type'] = "warning";
+                    // Activity log for duplicate join attempt
+                    $log_action = 'join_group_duplicate';
+                    $log_details = json_encode(['group_id' => $group_id, 'status' => 'approved']);
+                    $log_stmt = $conn->prepare("INSERT INTO activity_log (user_id, group_id, action, details) VALUES (?, ?, ?, ?)");
+                    if ($log_stmt) {
+                        $log_stmt->bind_param("iiss", $user_id, $group_id, $log_action, $log_details);
+                        $log_stmt->execute();
+                        $log_stmt->close();
+                    }
+                } else {
+                    $_SESSION['message'] = "Your join request is pending approval.";
+                    $_SESSION['message_type'] = "info";
+                    // Activity log for pending join attempt
+                    $log_action = 'join_group_pending';
+                    $log_details = json_encode(['group_id' => $group_id, 'status' => 'pending']);
+                    $log_stmt = $conn->prepare("INSERT INTO activity_log (user_id, group_id, action, details) VALUES (?, ?, ?, ?)");
+                    if ($log_stmt) {
+                        $log_stmt->bind_param("iiss", $user_id, $group_id, $log_action, $log_details);
+                        $log_stmt->execute();
+                        $log_stmt->close();
+                    }
+                }
+            } else {
+                // Insert join request
+                $joinQuery = "INSERT INTO group_membership (user_id, group_id, status, join_request_date) VALUES (?, ?, 'pending', NOW())";
+                $stmt = $conn->prepare($joinQuery);
+                $stmt->bind_param("ii", $user_id, $group_id);
+                if ($stmt->execute()) {
+                    // Create poll after join request
+                    // Fetch the member's name
+                    $getMemberNameQuery = "SELECT name FROM users WHERE id = ?";
+                    $stmt = $conn->prepare($getMemberNameQuery);
+                    $stmt->bind_param("i", $user_id);
+                    $stmt->execute();
+                    $result = $stmt->get_result();
+                    $memberName = '';
+                    if ($result && $row = $result->fetch_assoc()) {
+                        $memberName = $row['name'];
+                    }
+
+                    // Insert poll into polls table
+                    $pollQuestion = "{$memberName} wants to join the group. Do you approve?";
+                    $insertPollQuery = "INSERT INTO polls (group_id, poll_question) VALUES (?, ?)";
+                    $stmt = $conn->prepare($insertPollQuery);
+                    $stmt->bind_param("is", $group_id, $pollQuestion);
+                    if ($stmt->execute()) {
+                        $_SESSION['message'] = "Join request sent successfully! Please wait for approval.";
+                        $_SESSION['message_type'] = "success";
+                        log_security_event('JOIN_REQUEST', "User $user_id requested to join group $group_id", $ip_address);
+                        $_SESSION['join_req_rate']['count']++;
+                        // Activity log for successful join request
+                        $log_action = 'join_group_request';
+                        $log_details = json_encode(['group_id' => $group_id, 'status' => 'pending']);
+                        $log_stmt = $conn->prepare("INSERT INTO activity_log (user_id, group_id, action, details) VALUES (?, ?, ?, ?)");
+                        if ($log_stmt) {
+                            $log_stmt->bind_param("iiss", $user_id, $group_id, $log_action, $log_details);
+                            $log_stmt->execute();
+                            $log_stmt->close();
+                        }
+                    }
+                }
             }
         }
     }
@@ -415,7 +513,7 @@ if ($joinedGroupsResult) {
                         <p class="text-gray-600">
                             <span class="font-medium text-gray-700">Role:</span>
                             <span
-                                class="<?php echo $group['is_admin'] ? 'text-blue-600' : 'text-green-600'; ?> font-medium">
+                                <?php echo $group['is_admin'] ? 'class="text-blue-600"' : 'class="text-green-600"'; ?> font-medium">
                                 <?php echo $group['is_admin'] ? 'Admin' : 'Member'; ?>
                             </span>
                         </p>
