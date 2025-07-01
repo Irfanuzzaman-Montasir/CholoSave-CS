@@ -1,4 +1,6 @@
 <?php
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
 // Include the database connection file and session management
 include 'db.php'; // This will handle database connection
 include 'session.php'; // This will handle session start and checks
@@ -44,6 +46,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         session_start();
         $_SESSION['user_id'] = $user['id'];
         $_SESSION['role'] = $user['role']; // Assuming role column exists to differentiate between admin and users
+
+        // Regenerate session ID for session fixation protection
+        session_regenerate_id(true);
+
+        // --- Email alert for login from new IP (PHPMailer) ---
+        require_once __DIR__ . '/vendor/phpmailer/phpmailer/src/PHPMailer.php';
+        require_once __DIR__ . '/vendor/phpmailer/phpmailer/src/SMTP.php';
+        require_once __DIR__ . '/vendor/phpmailer/phpmailer/src/Exception.php';
+
+        $current_ip = $_SERVER['REMOTE_ADDR'];
+
+        // Fetch last login IP from DB
+        $stmt = $conn->prepare("SELECT last_login_ip FROM users WHERE id = ?");
+        $stmt->bind_param("i", $user['id']);
+        $stmt->execute();
+        $stmt->bind_result($last_ip);
+        $stmt->fetch();
+        $stmt->close();
+
+        if ($last_ip && $last_ip !== $current_ip) {
+            // IP has changed, send email alert
+            $mail = new PHPMailer(true);
+            try {
+                $mail->isSMTP();
+                $mail->Host = 'smtp.gmail.com';
+                $mail->SMTPAuth = true;
+                $mail->Username = 'gamingworld219@gmail.com'; 
+                $mail->Password = 'smyy qyyt frio erug';    
+                $mail->Port = 587;
+
+                $mail->setFrom('gamingworld219@gmail.com', 'CholoSave Security');
+                $mail->addAddress($user['email']);
+                $mail->Subject = 'New Login Detected on Your Account';
+                $mail->Body = "Hi,\n\nA login to your account was detected from a new IP address: $current_ip\nIf this was not you, please secure your account immediately.";
+                $mail->send();
+            } catch (Exception $e) {
+                // Optionally log or handle email error
+            }
+        }
+        // Update last_login_ip in DB
+        $stmt = $conn->prepare("UPDATE users SET last_login_ip = ? WHERE id = ?");
+        $stmt->bind_param("si", $current_ip, $user['id']);
+        $stmt->execute();
+        $stmt->close();
 
         // Redirect based on user role
         if ($user['role'] === 'admin') {
