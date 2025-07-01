@@ -43,8 +43,22 @@ $payment_methods = $payment_stmt->get_result()->fetch_assoc();
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-  $selected_method = $_POST['payment_method'] ?? '';
-  if (!empty($selected_method)) {
+    // Sanitize and validate payment_method
+    $allowed_methods = ['bKash', 'Rocket', 'Nagad'];
+    $selected_method = $_POST['payment_method'] ?? '';
+    if (!in_array($selected_method, $allowed_methods, true)) {
+        die('Invalid payment method.');
+    }
+
+    // Sanitize and validate user_id, group_id, amount
+    $user_id = filter_var($_POST['user_id'], FILTER_VALIDATE_INT);
+    $group_id = filter_var($_POST['group_id'], FILTER_VALIDATE_INT);
+    $total_amount = filter_var($_POST['amount'], FILTER_VALIDATE_FLOAT);
+
+    if (!$user_id || !$group_id || !$total_amount || $total_amount <= 0) {
+        die('Invalid input data.');
+    }
+
     // Check if the user has remaining payments
     $check_stmt = $conn->prepare("SELECT time_period_remaining FROM group_membership WHERE user_id = ? AND group_id = ?");
     $check_stmt->bind_param('ii', $user_id, $group_id);
@@ -71,6 +85,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // OTP Generation
     $otp = sprintf("%06d", mt_rand(1, 999999));
+    $otp_hash = hash('sha256', $otp); // Hash the OTP
     $otp_expiry = date('Y-m-d H:i:s', strtotime('+2 minutes'));
 
     // Clear any previous OTP for this transaction
@@ -78,9 +93,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $clear_otp_stmt->bind_param('ii', $user_id, $group_id);
     $clear_otp_stmt->execute();
 
-    // Store OTP in a separate table
+    // Store OTP hash in a separate table
     $store_otp_stmt = $conn->prepare("INSERT INTO payment_otps (user_id, group_id, otp, otp_expiry, transaction_id, amount, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?)");
-    $store_otp_stmt->bind_param('iisssds', $user_id, $group_id, $otp, $otp_expiry, $transaction_id, $total_amount, $selected_method);
+    $store_otp_stmt->bind_param('iisssds', $user_id, $group_id, $otp_hash, $otp_expiry, $transaction_id, $total_amount, $selected_method);
     $store_otp_stmt->execute();
 
     // Send OTP via email
@@ -110,7 +125,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         echo "OTP could not be sent. Error: {$mail->ErrorInfo}";
         exit;
     }
-  }
 }
 ?>
 

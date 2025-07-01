@@ -30,12 +30,13 @@ if (!$payment_otp_result) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $entered_otp = $_POST['otp'] ?? '';
+    $entered_otp = preg_replace('/[^0-9]/', '', $_POST['otp'] ?? '');
     
     // Check OTP validity
-    if ($entered_otp === $payment_otp_result['otp'] && 
-        strtotime($payment_otp_result['otp_expiry']) > time()) {
-        
+    if (
+        hash('sha256', $entered_otp) === $payment_otp_result['otp'] &&
+        strtotime($payment_otp_result['otp_expiry']) > time()
+    ) {
         // Start transaction
         $conn->begin_transaction();
 
@@ -73,6 +74,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['total_amount'] = $payment_otp_result['amount'];
             $_SESSION['payment_method'] = $payment_otp_result['payment_method'];
             $_SESSION['transaction_date'] = date('Y-m-d H:i:s');
+
+            // Fetch user email and name for confirmation email
+            $user_stmt = $conn->prepare("SELECT name, email FROM users WHERE id = ?");
+            $user_stmt->bind_param('i', $user_id);
+            $user_stmt->execute();
+            $user_result = $user_stmt->get_result()->fetch_assoc();
+            $user_name = $user_result['name'];
+            $user_email = $user_result['email'];
+
+            // Send payment confirmation email
+            $mail = new PHPMailer(true);
+            try {
+                $mail->isSMTP();
+                $mail->Host = 'smtp.gmail.com';
+                $mail->SMTPAuth = true;
+                $mail->Username = 'cholosave.uiu@gmail.com';
+                $mail->Password = 'yayd tytg zrwt igjw'; // Use App Password
+                $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                $mail->Port = 587;
+
+                $mail->setFrom('cholosave.uiu@gmail.com', 'CholoSave');
+                $mail->addAddress($user_email, $user_name);
+                $mail->isHTML(true);
+                $mail->Subject = 'Payment Successful - CholoSave';
+                $mail->Body = "Dear $user_name,<br><br>Your payment of BDT <b>" . number_format($payment_otp_result['amount'], 2) . "</b> has been successfully received.<br>Transaction ID: <b>" . htmlspecialchars($payment_otp_result['transaction_id']) . "</b><br>Payment Method: <b>" . htmlspecialchars($payment_otp_result['payment_method']) . "</b><br>Date: <b>" . date('Y-m-d H:i:s') . "</b><br><br>Thank you for using CholoSave!";
+
+                $mail->send();
+            } catch (Exception $e) {
+                // Optionally log email error, but do not interrupt payment flow
+            }
 
             header("Location: success_payment.php");
             exit;
