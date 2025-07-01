@@ -1,8 +1,31 @@
 <?php
+// --- Secure Session Management ---
+ini_set('session.cookie_httponly', 1);
+ini_set('session.cookie_secure', 1);
+ini_set('session.cookie_samesite', 'Strict');
 session_start();
 
-if (!isset($_SESSION['user_id'])) {
-    header("Location: /test_project/error_page.php");
+// --- HTTPS Enforcement ---
+if (empty($_SERVER['HTTPS']) || $_SERVER['HTTPS'] === 'off') {
+    if ($_SERVER['HTTP_HOST'] !== 'localhost' && $_SERVER['HTTP_HOST'] !== '127.0.0.1') {
+        header('Location: https://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
+        exit();
+    }
+}
+
+// --- Session Timeout (optional, 30 min) ---
+$timeout = 1800;
+if (isset($_SESSION['LAST_ACTIVITY']) && (time() - $_SESSION['LAST_ACTIVITY'] > $timeout)) {
+    session_unset();
+    session_destroy();
+    header('Location: /CholoSave-CS/login.php');
+    exit();
+}
+$_SESSION['LAST_ACTIVITY'] = time();
+
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['group_id'])) {
+    error_log('[MEMBER LOG] Unauthorized access attempt at ' . date('c'));
+    header('Location: /test_project/error_page.php');
     exit;
 }
 
@@ -29,14 +52,14 @@ $withdrawalQuery = "
     ORDER BY w.request_date DESC
 ";
 
-
 // Execute queries
 if ($stmt = $conn->prepare($withdrawalQuery)) {
     $stmt->bind_param('i', $group_id);
     $stmt->execute();
     $withdrawalResult = $stmt->get_result();
 } else {
-    die("Error preparing withdrawal query.");
+    error_log('[MEMBER LOG] Error preparing withdrawal query at ' . date('c'));
+    die('Error preparing withdrawal query.');
 }
 
 ?>
@@ -153,16 +176,16 @@ if ($stmt = $conn->prepare($withdrawalQuery)) {
                                                         </div>
                                                     </div>
                                                   </td>";
-                                            echo "<td class='px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900'>" . number_format($row['amount']) . "</td>";
+                                            echo "<td class='px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900'>" . htmlspecialchars(number_format($row['amount'])) . "</td>";
                                             echo "<td class='px-6 py-4 whitespace-nowrap text-sm text-gray-500'>" . htmlspecialchars($row['payment_method']) . "</td>";
-                                            echo "<td class='px-6 py-4 whitespace-nowrap text-sm text-gray-500'>" . date('M d, Y', strtotime($row['request_date'])) . "</td>";
+                                            echo "<td class='px-6 py-4 whitespace-nowrap text-sm text-gray-500'>" . htmlspecialchars(date('M d, Y', strtotime($row['request_date']))) . "</td>";
                                             echo "<td class='px-6 py-4 whitespace-nowrap'>
                                                     <span class='px-2 inline-flex text-xs leading-5 font-semibold rounded-full {$statusClass}'>
-                                                        " . ucfirst($row['status']) . "
+                                                        " . htmlspecialchars(ucfirst($row['status'])) . "
                                                     </span>
                                                   </td>";
                                             echo "<td class='px-6 py-4 whitespace-nowrap text-sm text-gray-500'>" . 
-                                                ($row['approve_date'] ? date('M d, Y', strtotime($row['approve_date'])) : '-') . "</td>";
+                                                ($row['approve_date'] ? htmlspecialchars(date('M d, Y', strtotime($row['approve_date']))) : '-') . "</td>";
                                             echo "</tr>";
                                         }
                                     } else {
